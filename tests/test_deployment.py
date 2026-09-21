@@ -27,6 +27,33 @@ def test_frontend_dist_is_present():
     )
 
 
+def test_missing_build_is_reported_by_manage_py_check(settings):
+    """A missing SPA build must be visible, not a buried stderr warning."""
+    from core.checks import frontend_build_present
+
+    settings.FRONTEND_DIST = Path("/definitely/not/here")
+    warnings = frontend_build_present(None)
+    assert [w.id for w in warnings] == ["core.W001"]
+    assert "/definitely/not/here" in warnings[0].msg
+
+
+def test_check_is_silent_when_the_build_is_present():
+    from core.checks import frontend_build_present
+
+    assert frontend_build_present(None) == []
+
+
+def test_default_frontend_dist_finds_a_backend_only_upload(tmp_path):
+    """cPanel layout: only backend/ uploaded, build dropped in frontend_dist/."""
+    from config.settings.base import _default_frontend_dist
+
+    app_root = tmp_path / "coop"
+    (app_root / "frontend_dist").mkdir(parents=True)
+    (app_root / "frontend_dist" / "index.html").write_text("<div id=\"root\">")
+
+    assert _default_frontend_dist(app_root) == app_root / "frontend_dist"
+
+
 def test_spa_catch_all_serves_the_shell(client):
     """A client-side route must resolve on a hard refresh."""
     response = client.get("/app/savings")

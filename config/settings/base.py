@@ -199,8 +199,26 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # Defaults to the sibling frontend/dist of a checked-out repo. Override with the
 # FRONTEND_DIST env var when the server's layout differs — e.g. when only the
 # contents of backend/ were uploaded, so no sibling frontend/ exists.
+def _default_frontend_dist(base_dir):
+    """Locate the SPA build across the layouts we actually deploy.
+
+    A full checkout keeps backend/ and frontend/ as siblings. Shared hosting
+    often gets only the contents of backend/ uploaded to the app root, with the
+    build dropped alongside as frontend_dist/. Probe for index.html rather than
+    the directory, so a stale empty folder doesn't win.
+    """
+    candidates = (
+        base_dir.parent / 'frontend' / 'dist',   # full checkout
+        base_dir / 'frontend_dist',              # backend-only upload (cPanel)
+    )
+    for candidate in candidates:
+        if (candidate / 'index.html').is_file():
+            return candidate
+    return candidates[0]
+
+
 FRONTEND_DIST = Path(
-    os.environ.get('FRONTEND_DIST') or BASE_DIR.parent / 'frontend' / 'dist'
+    os.environ.get('FRONTEND_DIST') or _default_frontend_dist(BASE_DIR)
 )
 
 # Default primary key field type
