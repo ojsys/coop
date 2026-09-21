@@ -194,9 +194,14 @@ MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 # The Vite build of the React app. Django serves this shell for non-API routes
-# on single-origin deployments (see core/views_web.spa_index). BASE_DIR is
-# backend/, so the sibling frontend/dist is one level up.
-FRONTEND_DIST = BASE_DIR.parent / 'frontend' / 'dist'
+# on single-origin deployments (see core/views_web.spa_index).
+#
+# Defaults to the sibling frontend/dist of a checked-out repo. Override with the
+# FRONTEND_DIST env var when the server's layout differs — e.g. when only the
+# contents of backend/ were uploaded, so no sibling frontend/ exists.
+FRONTEND_DIST = Path(
+    os.environ.get('FRONTEND_DIST') or BASE_DIR.parent / 'frontend' / 'dist'
+)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
