@@ -1,0 +1,637 @@
+/* ==========================================================================
+   CooperativeOS — Django admin theme
+   --------------------------------------------------------------------------
+   The admin ships its palette as CSS custom properties, so this file mostly
+   *remaps those tokens* onto the CooperativeOS design tokens rather than
+   fighting admin stylesheets. Tokens mirror frontend/src/theme.css and
+   mobile/lib/theme.dart (green / gold / paper) so the three surfaces agree.
+
+   Loaded from templates/admin/base_site.html via {% block extrastyle %},
+   which the admin renders after base.css and dark_mode.css — so these
+   definitions win. Selectors deliberately match Django's own
+   (`html[data-theme="light"], :root` etc.) so an explicit light choice still
+   beats the `prefers-color-scheme` dark block, exactly as upstream intends.
+
+   The product itself is light-only; the dark palette below exists because the
+   admin ships a theme toggle, and is a warm ink/green reading of the same
+   brand rather than Django's stock blue-grey.
+   ========================================================================== */
+
+/* -- CooperativeOS design tokens ------------------------------------------ */
+html[data-theme="light"],
+:root {
+  --coop-green: #0b4f3a;
+  --coop-green-hover: #0e6048;
+  --coop-green-bright: #1f8a5b;
+  --coop-green-deep: #093f2f;
+  --coop-green-50: #e7f0ea;
+  --coop-green-100: #cfe3d9;
+  --coop-green-200: #9cc4b3;
+
+  --coop-gold: #d99e2b;
+  --coop-gold-deep: #c98a1e;
+  --coop-gold-50: #f6ecd2;
+
+  --coop-paper: #f4f1ea;
+  --coop-card: #fffdf9;
+  --coop-sand: #f7f3ea;
+  --coop-sand-deep: #f1ece1;
+
+  --coop-line: #ece7db;
+  --coop-line-soft: #e7e2d6;
+  --coop-line-deep: #e0dacd;
+
+  --coop-ink: #1b1a17;
+  --coop-ink-soft: #46423a;
+  --coop-muted: #6f6b62;
+  --coop-muted-2: #8a8478;
+  --coop-faint: #a39d90;
+
+  --coop-danger: #b8432c;
+  --coop-danger-50: #f7e6e1;
+
+  --coop-radius-card: 15px;
+  --coop-radius-lg: 14px;
+  --coop-radius-md: 11px;
+  --coop-radius-sm: 9px;
+
+  --coop-shadow-soft: 0 1px 2px rgba(27, 26, 23, 0.04),
+    0 8px 24px -12px rgba(27, 26, 23, 0.12);
+  --coop-focus-ring: 0 0 0 3px rgba(11, 79, 58, 0.12);
+
+  /* -- Django admin tokens, remapped ------------------------------------- */
+  --primary: var(--coop-green);
+  --secondary: var(--coop-green);
+  --accent: var(--coop-gold);
+  --primary-fg: var(--coop-paper);
+
+  --body-fg: var(--coop-ink-soft);
+  --body-bg: var(--coop-paper);
+  --body-quiet-color: var(--coop-muted);
+  --body-medium-color: var(--coop-ink-soft);
+  --body-loud-color: var(--coop-ink);
+
+  --header-color: var(--coop-green-200);
+  --header-branding-color: var(--coop-gold);
+  --header-bg: var(--coop-green);
+  --header-link-color: var(--coop-paper);
+
+  --breadcrumbs-fg: var(--coop-green-200);
+  --breadcrumbs-link-fg: var(--coop-paper);
+  --breadcrumbs-bg: var(--coop-green-deep);
+
+  --link-fg: var(--coop-green);
+  --link-hover-color: var(--coop-green-hover);
+  --link-selected-fg: var(--coop-green-bright);
+
+  --hairline-color: var(--coop-line);
+  --border-color: var(--coop-line-soft);
+
+  --error-fg: var(--coop-danger);
+  --message-success-bg: var(--coop-green-50);
+  --message-warning-bg: var(--coop-gold-50);
+  --message-error-bg: var(--coop-danger-50);
+
+  --darkened-bg: var(--coop-sand);
+  --selected-bg: var(--coop-sand-deep);
+  --selected-row: var(--coop-gold-50);
+
+  --button-fg: var(--coop-paper);
+  --button-bg: var(--coop-green);
+  --button-hover-bg: var(--coop-green-hover);
+  --default-button-bg: var(--coop-green);
+  --default-button-hover-bg: var(--coop-green-hover);
+  --close-button-bg: var(--coop-muted-2);
+  --close-button-hover-bg: var(--coop-ink-soft);
+  --delete-button-bg: var(--coop-danger);
+  --delete-button-hover-bg: #9c3925;
+
+  --object-tools-fg: var(--coop-paper);
+  --object-tools-bg: var(--coop-green);
+  --object-tools-hover-bg: var(--coop-green-hover);
+
+  --font-family-primary: "Hanken Grotesk", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-family-monospace: "IBM Plex Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
+}
+
+/* -- Dark: a warm ink/green reading of the same brand --------------------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --coop-card: #201e19;
+    --coop-line: #2e2a22;
+    --coop-line-soft: #3a352b;
+
+    --primary: var(--coop-green-hover);
+    --primary-fg: #fffdf9;
+
+    --body-fg: #ece7db;
+    --body-bg: #171612;
+    --body-quiet-color: #a39d90;
+    --body-medium-color: #cfc9bb;
+    --body-loud-color: #fffdf9;
+
+    --header-bg: var(--coop-green-deep);
+    --breadcrumbs-bg: #0b120f;
+    --breadcrumbs-fg: var(--coop-green-200);
+
+    --link-fg: var(--coop-green-200);
+    --link-hover-color: var(--coop-green-100);
+    --link-selected-fg: var(--coop-green-100);
+
+    --hairline-color: #2e2a22;
+    --border-color: #3a352b;
+
+    --error-fg: #e08672;
+    --message-success-bg: #10402f;
+    --message-warning-bg: #4a3610;
+    --message-error-bg: #4a1d13;
+
+    --darkened-bg: #201e19;
+    --selected-bg: #262219;
+    --selected-row: #3a2f14;
+
+    --button-bg: var(--coop-green-bright);
+    --button-hover-bg: #23a06a;
+    --default-button-bg: var(--coop-green-bright);
+    --default-button-hover-bg: #23a06a;
+    --close-button-bg: #3a352b;
+    --close-button-hover-bg: #4f4839;
+
+    --object-tools-bg: var(--coop-green-bright);
+    --object-tools-hover-bg: #23a06a;
+
+    --coop-focus-ring: 0 0 0 3px rgba(31, 138, 91, 0.25);
+    --coop-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 8px 24px -12px rgba(0, 0, 0, 0.6);
+
+    color-scheme: dark;
+  }
+}
+
+html[data-theme="dark"] {
+  --coop-card: #201e19;
+  --coop-line: #2e2a22;
+  --coop-line-soft: #3a352b;
+
+  --primary: var(--coop-green-hover);
+  --primary-fg: #fffdf9;
+
+  --body-fg: #ece7db;
+  --body-bg: #171612;
+  --body-quiet-color: #a39d90;
+  --body-medium-color: #cfc9bb;
+  --body-loud-color: #fffdf9;
+
+  --header-bg: var(--coop-green-deep);
+  --breadcrumbs-bg: #0b120f;
+  --breadcrumbs-fg: var(--coop-green-200);
+
+  --link-fg: var(--coop-green-200);
+  --link-hover-color: var(--coop-green-100);
+  --link-selected-fg: var(--coop-green-100);
+
+  --hairline-color: #2e2a22;
+  --border-color: #3a352b;
+
+  --error-fg: #e08672;
+  --message-success-bg: #10402f;
+  --message-warning-bg: #4a3610;
+  --message-error-bg: #4a1d13;
+
+  --darkened-bg: #201e19;
+  --selected-bg: #262219;
+  --selected-row: #3a2f14;
+
+  --button-bg: var(--coop-green-bright);
+  --button-hover-bg: #23a06a;
+  --default-button-bg: var(--coop-green-bright);
+  --default-button-hover-bg: #23a06a;
+  --close-button-bg: #3a352b;
+  --close-button-hover-bg: #4f4839;
+
+  --object-tools-bg: var(--coop-green-bright);
+  --object-tools-hover-bg: #23a06a;
+
+  --coop-focus-ring: 0 0 0 3px rgba(31, 138, 91, 0.25);
+  --coop-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 8px 24px -12px rgba(0, 0, 0, 0.6);
+
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Chrome — the parts tokens alone can't express
+   ========================================================================== */
+
+body {
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* -- Header: green bar, gold logo tile (mirrors ui/SidebarShell.tsx) ------ */
+#header {
+  padding: 10px 16px;
+  border-bottom: none;
+  box-shadow: none;
+  align-items: center;
+}
+
+#branding {
+  display: flex;
+  align-items: center;
+}
+
+#site-name,
+#branding h1 {
+  margin: 0;
+  font-weight: 600;
+}
+
+#site-name a,
+#branding h1 a {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--coop-paper);
+  text-decoration: none;
+}
+
+.coop-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: var(--coop-radius-md);
+  background: var(--coop-gold);
+  color: var(--coop-green);
+  font-size: 17px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.coop-wordmark {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.coop-name {
+  font-family: "Bricolage Grotesque", var(--font-family-primary);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--coop-paper);
+}
+
+.coop-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--coop-green-200);
+}
+
+#user-tools {
+  font-size: 12px;
+  color: var(--coop-green-200);
+}
+
+#user-tools a,
+#logout-form button {
+  border-bottom: none;
+  color: var(--coop-paper);
+  text-decoration: none;
+}
+
+#user-tools a:hover,
+#logout-form button:hover {
+  color: var(--coop-gold);
+}
+
+/* -- Breadcrumbs ---------------------------------------------------------- */
+div.breadcrumbs {
+  padding: 9px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+/* -- Headings ------------------------------------------------------------- */
+#content h1,
+#content h2,
+.module h2,
+.module caption {
+  font-family: "Bricolage Grotesque", var(--font-family-primary);
+  letter-spacing: -0.01em;
+}
+
+#content > h1 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--coop-ink);
+}
+
+html[data-theme="dark"] #content > h1 {
+  color: var(--body-loud-color);
+}
+
+/* -- Cards: the app's card surface on the paper canvas -------------------- */
+.module,
+.inline-group,
+.dashboard .module {
+  background: var(--coop-card);
+  border: 1px solid var(--hairline-color);
+  border-radius: var(--coop-radius-lg);
+  box-shadow: var(--coop-shadow-soft);
+  overflow: hidden;
+}
+
+.module > h2,
+.module caption,
+.inline-group h2 {
+  background: var(--coop-sand);
+  color: var(--coop-ink);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline-color);
+}
+
+html[data-theme="dark"] .module > h2,
+html[data-theme="dark"] .module caption,
+html[data-theme="dark"] .inline-group h2 {
+  background: var(--darkened-bg);
+  color: var(--body-loud-color);
+}
+
+/* -- Sidebar nav: light rail, green-50 active (mirrors SidebarShell) ------ */
+#nav-sidebar {
+  background: var(--coop-card);
+  border-right: 1px solid var(--coop-line-soft);
+  padding: 10px 10px 16px;
+}
+
+#nav-sidebar .module th,
+#nav-sidebar .module caption {
+  background: transparent;
+  border: none;
+  color: var(--coop-muted-2);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+#nav-sidebar .module {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  margin-bottom: 6px;
+}
+
+#nav-sidebar a {
+  display: block;
+  border-radius: var(--coop-radius-sm);
+  padding: 7px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--coop-ink-soft);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+html[data-theme="dark"] #nav-sidebar a {
+  color: var(--body-fg);
+}
+
+#nav-sidebar a:hover,
+#nav-sidebar a:focus {
+  background: var(--coop-sand-deep);
+  color: var(--coop-ink);
+}
+
+html[data-theme="dark"] #nav-sidebar a:hover {
+  background: var(--selected-bg);
+  color: var(--body-loud-color);
+}
+
+#nav-sidebar .current-model a,
+#nav-sidebar tr.current-model a {
+  background: var(--coop-green-50);
+  color: var(--coop-green);
+  font-weight: 600;
+}
+
+html[data-theme="dark"] #nav-sidebar .current-model a {
+  background: rgba(31, 138, 91, 0.18);
+  color: var(--coop-green-200);
+}
+
+#nav-sidebar .module tr,
+#nav-sidebar .module th,
+#nav-sidebar .module td {
+  border: none;
+  background: transparent;
+}
+
+/* -- Tables: hairlines, uppercase heads, tabular figures ------------------ */
+#changelist table,
+.module table {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+#changelist table thead th,
+.module table thead th {
+  background: var(--coop-sand);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--coop-muted);
+  border-bottom: 1px solid var(--hairline-color);
+}
+
+html[data-theme="dark"] #changelist table thead th,
+html[data-theme="dark"] .module table thead th {
+  background: var(--darkened-bg);
+  color: var(--body-quiet-color);
+}
+
+#changelist tbody tr:hover > * {
+  background: var(--coop-sand);
+}
+
+html[data-theme="dark"] #changelist tbody tr:hover > * {
+  background: var(--selected-bg);
+}
+
+/* Reference-ish columns read as data, like the app's mono member numbers. */
+#changelist .field-code,
+#changelist .field-reference,
+#changelist .field-member_no,
+#changelist .field-number,
+#changelist .field-psp_reference,
+#changelist .field-event_id,
+#changelist .field-subaccount_code {
+  font-family: var(--font-family-monospace);
+  font-size: 12.5px;
+}
+
+/* -- Filters -------------------------------------------------------------- */
+#changelist-filter {
+  background: var(--coop-card);
+  border: 1px solid var(--hairline-color);
+  border-radius: var(--coop-radius-lg);
+}
+
+#changelist-filter h2 {
+  background: var(--coop-sand);
+  color: var(--coop-ink);
+  border-bottom: 1px solid var(--hairline-color);
+  border-radius: 0;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+html[data-theme="dark"] #changelist-filter h2 {
+  background: var(--darkened-bg);
+  color: var(--body-loud-color);
+}
+
+#changelist-filter li.selected a {
+  color: var(--coop-green);
+  font-weight: 600;
+}
+
+html[data-theme="dark"] #changelist-filter li.selected a {
+  color: var(--coop-green-200);
+}
+
+/* -- Controls ------------------------------------------------------------- */
+.button,
+input[type="submit"],
+input[type="button"],
+.submit-row input,
+.object-tools a {
+  border-radius: var(--coop-radius-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.object-tools a {
+  text-transform: none;
+  font-size: 12px;
+  letter-spacing: 0;
+  border-radius: var(--coop-radius-md);
+}
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="number"],
+input[type="tel"],
+input[type="date"],
+input[type="time"],
+textarea,
+select,
+.vTextField {
+  border-radius: var(--coop-radius-sm);
+  border: 1px solid var(--coop-line);
+  background: var(--body-bg);
+  color: var(--body-fg);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+html[data-theme="dark"] input[type="text"],
+html[data-theme="dark"] input[type="password"],
+html[data-theme="dark"] input[type="email"],
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select,
+html[data-theme="dark"] .vTextField {
+  border-color: var(--border-color);
+  background: var(--darkened-bg);
+}
+
+input:focus,
+textarea:focus,
+select:focus,
+.vTextField:focus {
+  border-color: var(--coop-green);
+  box-shadow: var(--coop-focus-ring);
+  outline: none;
+}
+
+html[data-theme="dark"] input:focus,
+html[data-theme="dark"] textarea:focus,
+html[data-theme="dark"] select:focus {
+  border-color: var(--coop-green-bright);
+}
+
+/* -- Messages ------------------------------------------------------------- */
+ul.messagelist li {
+  border-radius: var(--coop-radius-sm);
+  font-weight: 500;
+  color: var(--coop-ink);
+  border: 1px solid var(--hairline-color);
+}
+
+html[data-theme="dark"] ul.messagelist li {
+  color: var(--body-loud-color);
+}
+
+/* -- Read-only notice: append-only records are viewers, make that read ---- */
+.readonly {
+  color: var(--body-quiet-color);
+}
+
+/* -- Pagination & footer -------------------------------------------------- */
+.paginator {
+  border-top: 1px solid var(--hairline-color);
+  font-size: 13px;
+}
+
+.paginator .this-page {
+  background: var(--coop-green);
+  color: var(--coop-paper);
+  border-radius: var(--coop-radius-sm);
+  padding: 2px 8px;
+}
+
+/* -- Login: a single card on the paper canvas ----------------------------- */
+body.login #container {
+  background: var(--coop-card);
+  border: 1px solid var(--hairline-color);
+  border-radius: var(--coop-radius-card);
+  box-shadow: var(--coop-shadow-soft);
+  overflow: hidden;
+}
+
+body.login #header {
+  border-radius: 0;
+  justify-content: center;
+}
+
+body.login .submit-row input {
+  width: 100%;
+  border-radius: var(--coop-radius-md);
+  padding: 10px 14px;
+}
+
+/* -- Responsive nudges ---------------------------------------------------- */
+@media (max-width: 767px) {
+  #header {
+    padding: 10px 12px;
+  }
+
+  .coop-sub {
+    display: none;
+  }
+}

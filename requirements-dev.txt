@@ -1,0 +1,8 @@
+# Local development and CI. Installs everything in requirements.txt as well.
+#
+#     pip install -r requirements-dev.txt
+#
+-r requirements.txt
+
+pytest==9.1.1
+pytest-django==4.12.0

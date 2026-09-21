@@ -1,0 +1,56 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% comment %}
+CooperativeOS admin shell.
+
+Lives in the project templates dir (settings TEMPLATES DIRS) rather than an app
+one: the admin app is listed first in INSTALLED_APPS, so APP_DIRS would find
+Django's own admin/base_site.html before ours.
+
+The theme is injected through the extrastyle block, which admin templates such
+as change_list.html override — they all call block.super, so it survives.
+tests/test_admin.py pins that behaviour.
+
+Note: multi-line notes must use comment/endcomment. The {# ... #} form is
+single-line only, so a multi-line one leaves any tag syntax inside it to be
+parsed for real.
+{% endcomment %}
+
+{% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('CooperativeOS admin') }}{% endblock %}
+
+{% block extrastyle %}
+  <link rel="icon" type="image/svg+xml" href="{% static 'cooperativeos/favicon.svg' %}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&amp;family=Hanken+Grotesk:wght@300..800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <link rel="stylesheet" href="{% static 'cooperativeos/admin.css' %}">
+{% endblock %}
+
+{% block branding %}
+<div id="site-name">
+  <a href="{% url 'admin:index' %}">
+    {% comment %}
+    The shared mark from frontend/src/ui/Logo.tsx: a gold rounded tile with two
+    members and a shared smile.
+    {% endcomment %}
+    <span class="coop-logo">
+      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+        <rect x="14" y="26" width="72" height="54" rx="16" fill="var(--coop-gold)"/>
+        <circle cx="36" cy="46" r="8" fill="var(--coop-green)"/>
+        <circle cx="64" cy="46" r="8" fill="var(--coop-green)"/>
+        <rect x="34" y="58" width="32" height="12" rx="6" fill="var(--coop-green)"/>
+      </svg>
+    </span>
+    <span class="coop-wordmark">
+      <span class="coop-name">{{ site_header|default:_('CooperativeOS') }}</span>
+      <span class="coop-sub">Platform administration</span>
+    </span>
+  </a>
+</div>
+{% if user.is_anonymous %}
+  {% include "admin/color_theme_toggle.html" %}
+{% endif %}
+{% endblock %}
+
+{% block nav-global %}{% endblock %}

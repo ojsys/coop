@@ -1,0 +1,19 @@
+Django==5.2.15
+django-cors-headers==4.9.0
+djangorestframework==3.17.1
+requests==2.34.2
+python-dotenv==1.0.1
+Pillow==12.3.0
+reportlab==5.0.0
+
+# Serves /static and the SPA build from the app process, so shared hosting
+# needs no Apache alias or .htaccess rules (see config/settings/prod.py).
+whitenoise==6.12.0
+
+# MySQL/MariaDB driver for cPanel. PyMySQL is pure Python, so it installs
+# without a compiler or libmysqlclient headers; prod.py calls
+# pymysql.install_as_MySQLdb(). Replace with mysqlclient if the host ships it.
+PyMySQL==1.2.3
+
+# Test-only dependencies live in requirements-dev.txt — don't install them on
+# the production host.
