@@ -274,6 +274,16 @@ body {
   font-weight: 700;
 }
 
+/* An uploaded platform logo sits inside the gold tile, exactly as the React
+   console renders it (see ui/SidebarShell.tsx). */
+.coop-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+  display: block;
+}
+
 .coop-wordmark {
   display: flex;
   flex-direction: column;
@@ -625,6 +635,147 @@ body.login .submit-row input {
   padding: 10px 14px;
 }
 
+/* ==========================================================================
+   Editing surfaces
+   Everything above dressed the *browsing* screens. An operator spends most of
+   their time on a change form, so leaving that stock undid the rest. These are
+   Django's own long-standing admin classes, not guesses at private markup.
+   ========================================================================== */
+
+/* -- Fieldsets as cards, matching the console's panels -------------------- */
+fieldset.module {
+  border: 1px solid var(--hairline-color);
+  border-radius: var(--coop-radius-lg);
+  background: var(--coop-card);
+  padding-bottom: 6px;
+}
+
+fieldset .description {
+  padding: 10px 14px 0;
+  font-size: 13px;
+  color: var(--body-quiet-color);
+  line-height: 1.5;
+}
+
+/* -- Rows: hairline separated, roomier than Django's default -------------- */
+.form-row {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--hairline-color);
+}
+
+.form-row:last-child {
+  border-bottom: none;
+}
+
+.aligned label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--body-medium-color);
+  padding-top: 8px;
+}
+
+/* -- Help text: secondary, never competing with the field ----------------- */
+.help,
+div.help,
+.form-row .helptext,
+p.help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--body-quiet-color);
+}
+
+/* Django renders some help as an icon+tooltip; keep it out of the way. */
+div.help[data-helptext] {
+  background: none;
+}
+
+/* -- Errors --------------------------------------------------------------- */
+.errorlist {
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  list-style: none;
+  border-radius: var(--coop-radius-sm);
+  background: var(--message-error-bg);
+  color: var(--error-fg);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.form-row.errors {
+  background: color-mix(in srgb, var(--message-error-bg) 45%, transparent);
+}
+
+/* -- The many-to-many selector (User groups & permissions) ---------------- */
+.selector select {
+  border-radius: var(--coop-radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.selector-chosen h2,
+.selector-available h2 {
+  background: var(--coop-sand);
+  color: var(--coop-ink);
+  border: 1px solid var(--hairline-color);
+  border-bottom: none;
+  border-radius: var(--coop-radius-sm) var(--coop-radius-sm) 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+html[data-theme="dark"] .selector-chosen h2,
+html[data-theme="dark"] .selector-available h2 {
+  background: var(--darkened-bg);
+  color: var(--body-loud-color);
+}
+
+.selector-chosen h2 {
+  background: var(--coop-green);
+  color: var(--coop-paper);
+  border-color: var(--coop-green);
+}
+
+/* -- "Today / Now" shortcuts under date & time fields --------------------- */
+.datetimeshortcuts a {
+  color: var(--link-fg);
+  font-weight: 500;
+}
+
+.datetimeshortcuts .clock-icon,
+.datetimeshortcuts .date-icon {
+  filter: saturate(0.6);
+}
+
+/* -- Read-only values: plainly not editable ------------------------------- */
+.form-row .readonly {
+  padding-top: 8px;
+  font-size: 13px;
+  color: var(--body-medium-color);
+}
+
+/* -- Inline rows ---------------------------------------------------------- */
+.inline-group .tabular tr.add-row td {
+  background: var(--coop-sand);
+}
+
+html[data-theme="dark"] .inline-group .tabular tr.add-row td {
+  background: var(--darkened-bg);
+}
+
+/* -- Submit row: primary action reads as primary -------------------------- */
+.submit-row {
+  border-radius: var(--coop-radius-lg);
+  border: 1px solid var(--hairline-color);
+  background: var(--coop-card);
+  padding: 12px 14px;
+}
+
+html[data-theme="dark"] .submit-row,
+html[data-theme="dark"] fieldset.module {
+  background: var(--darkened-bg);
+}
+
 /* -- Responsive nudges ---------------------------------------------------- */
 @media (max-width: 767px) {
   #header {
@@ -633,5 +784,9 @@ body.login .submit-row input {
 
   .coop-sub {
     display: none;
+  }
+
+  .form-row {
+    padding: 10px 12px;
   }
 }

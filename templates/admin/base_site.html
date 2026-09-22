@@ -35,15 +35,19 @@ parsed for real.
     members and a shared smile.
     {% endcomment %}
     <span class="coop-logo">
-      <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-        <rect x="14" y="26" width="72" height="54" rx="16" fill="var(--coop-gold)"/>
-        <circle cx="36" cy="46" r="8" fill="var(--coop-green)"/>
-        <circle cx="64" cy="46" r="8" fill="var(--coop-green)"/>
-        <rect x="34" y="58" width="32" height="12" rx="6" fill="var(--coop-green)"/>
-      </svg>
+      {% if platform_logo %}
+        <img src="{{ platform_logo }}" alt="">
+      {% else %}
+        <svg width="26" height="26" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <rect x="14" y="26" width="72" height="54" rx="16" fill="var(--coop-gold)"/>
+          <circle cx="36" cy="46" r="8" fill="var(--coop-green)"/>
+          <circle cx="64" cy="46" r="8" fill="var(--coop-green)"/>
+          <rect x="34" y="58" width="32" height="12" rx="6" fill="var(--coop-green)"/>
+        </svg>
+      {% endif %}
     </span>
     <span class="coop-wordmark">
-      <span class="coop-name">{{ site_header|default:_('CooperativeOS') }}</span>
+      <span class="coop-name">{{ platform_name|default:site_header|default:_('CooperativeOS') }}</span>
       <span class="coop-sub">Platform administration</span>
     </span>
   </a>

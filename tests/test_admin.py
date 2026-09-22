@@ -423,6 +423,43 @@ def test_theme_survives_templates_that_override_extrastyle(
     assert "Bricolage+Grotesque" in html
 
 
+def test_admin_header_uses_the_uploaded_platform_logo(dataset, admin_client_2fa,
+                                                      tmp_path, settings):
+    """An uploaded logo must reach the admin header, not just Settings.
+
+    The template cannot read PlatformProfile on its own — the branding arrives
+    through CooperativeOSAdminSite.each_context.
+    """
+    import io
+
+    from django.core.files.uploadedfile import SimpleUploadedFile
+    from PIL import Image
+
+    from platform_admin.models import PlatformProfile
+
+    settings.MEDIA_ROOT = tmp_path / "media"
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 64), (11, 79, 58)).save(buffer, format="PNG")
+
+    profile = PlatformProfile.load()
+    profile.name = "Startup Ripple"
+    profile.logo = SimpleUploadedFile("mark.png", buffer.getvalue(),
+                                      content_type="image/png")
+    profile.save()
+
+    html = admin_client_2fa.get(reverse("admin:index")).content.decode()
+    assert "platform_brand/" in html, "the uploaded logo should head the admin"
+    assert "Startup Ripple" in html
+
+
+def test_admin_header_falls_back_when_no_logo_is_uploaded(dataset,
+                                                          admin_client_2fa):
+    """Most installs have no logo yet; the built-in mark must still render."""
+    html = admin_client_2fa.get(reverse("admin:index")).content.decode()
+    assert "coop-logo" in html
+    assert "<svg" in html, "the built-in mark is the fallback"
+
+
 def test_branding_renders_the_cooperativeos_wordmark(dataset, admin_client_2fa):
     html = admin_client_2fa.get(reverse("admin:index")).content.decode()
     assert "coop-logo" in html
