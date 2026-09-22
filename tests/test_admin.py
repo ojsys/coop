@@ -443,15 +443,26 @@ def test_admin_header_uses_the_uploaded_platform_logo(dataset, admin_client_2fa,
     buffer = io.BytesIO()
     Image.new("RGB", (64, 64), (11, 79, 58)).save(buffer, format="PNG")
 
+    icon = io.BytesIO()
+    Image.new("RGB", (32, 32), (217, 158, 43)).save(icon, format="PNG")
+
     profile = PlatformProfile.load()
     profile.name = "Startup Ripple"
     profile.logo = SimpleUploadedFile("mark.png", buffer.getvalue(),
                                       content_type="image/png")
+    profile.favicon = SimpleUploadedFile("icon.png", icon.getvalue(),
+                                         content_type="image/png")
     profile.save()
 
     html = admin_client_2fa.get(reverse("admin:index")).content.decode()
     assert "platform_brand/" in html, "the uploaded logo should head the admin"
     assert "Startup Ripple" in html
+    # The tab icon must follow the upload too, and must not be declared as SVG
+    # when an operator uploaded a PNG.
+    assert 'rel="icon" href="' in html, "the uploaded favicon should be used"
+    assert "cooperativeos/favicon.svg" not in html, (
+        "the bundled icon should give way to the uploaded one"
+    )
 
 
 def test_admin_header_falls_back_when_no_logo_is_uploaded(dataset,

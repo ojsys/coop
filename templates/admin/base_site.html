@@ -20,7 +20,16 @@ parsed for real.
 {% block title %}{% if subtitle %}{{ subtitle }} | {% endif %}{{ title }} | {{ site_title|default:_('CooperativeOS admin') }}{% endblock %}
 
 {% block extrastyle %}
-  <link rel="icon" type="image/svg+xml" href="{% static 'cooperativeos/favicon.svg' %}">
+  {% comment %}
+  The uploaded favicon when Platform Settings has one, otherwise the mark
+  bundled with the build. No type attribute on the uploaded branch: it may be a
+  PNG, JPG or WebP, and declaring image/svg+xml for a PNG stops it rendering.
+  {% endcomment %}
+  {% if platform_favicon %}
+    <link rel="icon" href="{{ platform_favicon }}">
+  {% else %}
+    <link rel="icon" type="image/svg+xml" href="{% static 'cooperativeos/favicon.svg' %}">
+  {% endif %}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&amp;family=Hanken+Grotesk:wght@300..800&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">

@@ -48,7 +48,8 @@ class CooperativeOSAdminSite(admin.AdminSite):
         a row on every page render — including anonymous ones — is not
         something a GET should do.
         """
-        fallback = {"platform_logo": "", "platform_name": self.site_header}
+        fallback = {"platform_logo": "", "platform_favicon": "",
+                    "platform_name": self.site_header}
         try:
             from platform_admin.models import PlatformProfile
 
@@ -57,6 +58,8 @@ class CooperativeOSAdminSite(admin.AdminSite):
                 return fallback
             return {
                 "platform_logo": profile.logo.url if profile.logo else "",
+                "platform_favicon": (profile.favicon.url
+                                     if profile.favicon else ""),
                 "platform_name": profile.name or self.site_header,
             }
         except Exception:  # noqa: BLE001 - branding must never break the admin
