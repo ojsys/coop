@@ -22,6 +22,16 @@ from tenants.models import Cooperative
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def _isolated_media(tmp_path, settings):
+    """Keep uploaded test files out of the repo's media/ directory.
+
+    Django writes uploads to MEDIA_ROOT immediately — file writes are not part
+    of the test transaction, so without this every run leaves real files behind.
+    """
+    settings.MEDIA_ROOT = tmp_path / "media"
+
+
 def _png(color=(11, 79, 58), size=(64, 64)) -> SimpleUploadedFile:
     """A real PNG — ImageField validates the payload, so bytes won't do."""
     buffer = io.BytesIO()

@@ -89,6 +89,9 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS':
         'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 25,
+    # Logs every API failure before returning DRF's normal response. Without
+    # this, 4xx responses never reach any logger (see core/exception_handler).
+    'EXCEPTION_HANDLER': 'core.exception_handler.logging_exception_handler',
 }
 
 # HTTP header the client sends to select the active cooperative (tenant).
@@ -225,3 +228,54 @@ FRONTEND_DIST = Path(
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# --- Logging ---------------------------------------------------------------
+# Django's defaults log almost nothing once DEBUG is False: errors go to
+# mail_admins, ADMINS is empty, and the record is lost. DRF compounds it by
+# converting exceptions into responses before django.request sees them, so API
+# 4xx failures leave no trace at all — which makes a rejected upload impossible
+# to diagnose from the server.
+#
+# Everything lands in a rotating file alongside the app, and on stderr (which
+# Passenger captures). Override the directory with DJANGO_LOG_DIR.
+LOG_DIR = Path(os.environ.get('DJANGO_LOG_DIR') or BASE_DIR / 'logs')
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': LOG_DIR / 'app.log',
+            'maxBytes': 5 * 1024 * 1024,
+            'backupCount': 5,
+            'formatter': 'verbose',
+            'encoding': 'utf-8',
+        },
+    },
+    'loggers': {
+        # 500s and Django-level request failures.
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        # Every API error, including validation 400s.
+        'api.errors': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
