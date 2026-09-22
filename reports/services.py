@@ -171,7 +171,9 @@ def send_arrears_reminders(cooperative, *, year=None, month=None):
 
     from accounts.models import Membership
     from communications.models import Notification
-    from communications.services import notify
+    # notify_member, not notify: a reminder nobody sees is not a reminder. This
+    # reaches in-app *and* email, respecting each member's channel preferences.
+    from communications.services import notify_member
 
     now = timezone.now()
     report = arrears_report(cooperative, year=year or now.year,
@@ -183,11 +185,11 @@ def send_arrears_reminders(cooperative, *, year=None, month=None):
                       .select_related("user").first())
         if membership is None:
             continue
-        notify(membership, kind=Notification.Kind.CONTRIBUTION,
-               title="Contribution reminder",
-               body=(f"Your outstanding dues for this period are "
-                     f"N{item['outstanding']:,.2f}. Please pay to stay in good "
-                     f"standing."))
+        notify_member(membership, kind=Notification.Kind.CONTRIBUTION,
+                      title="Contribution reminder",
+                      body=(f"Your outstanding dues for this period are "
+                            f"₦{item['outstanding']:,.2f}. Please pay to stay "
+                            f"in good standing."))
         reached += 1
     return {
         "reached": reached,

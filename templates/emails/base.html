@@ -1,0 +1,110 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ subject }}</title>
+</head>
+{# Email clients strip <style> unpredictably, so everything is inlined and the
+   layout is table-based. Palette mirrors frontend/src/theme.css. #}
+<body style="margin:0;padding:0;background:#f4f1ea;">
+  <div style="display:none;font-size:1px;color:#f4f1ea;max-height:0;overflow:hidden;">
+    {% block preheader %}{{ subject }}{% endblock %}
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+         style="background:#f4f1ea;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"
+               style="max-width:560px;background:#fffdf9;border:1px solid #ece7db;border-radius:14px;overflow:hidden;">
+
+          <!-- Brand band -->
+          <tr>
+            <td style="background:#0b4f3a;padding:20px 28px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="padding-right:12px;">
+                    {% if logo_url %}
+                      <img src="{{ logo_url }}" alt="" width="36" height="36"
+                           style="display:block;border-radius:8px;background:#d99e2b;">
+                    {% else %}
+                      {# Most societies have not uploaded a logo yet. A gold
+                         initial keeps the brand mark present either way, so the
+                         header never renders as a bare green band. #}
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                        <tr>
+                          <td width="36" height="36" align="center" valign="middle"
+                              style="width:36px;height:36px;background:#d99e2b;border-radius:8px;
+                                     font-family:Helvetica,Arial,sans-serif;font-size:17px;
+                                     font-weight:700;color:#0b4f3a;text-align:center;">
+                            {{ brand_name|first|upper }}
+                          </td>
+                        </tr>
+                      </table>
+                    {% endif %}
+                  </td>
+                  <td>
+                    <div style="font-family:Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;color:#f4f1ea;line-height:1.2;">
+                      {{ brand_name }}
+                    </div>
+                    {% if brand_subtitle %}
+                      <div style="font-family:Helvetica,Arial,sans-serif;font-size:11px;color:#9cc4b3;padding-top:2px;">
+                        {{ brand_subtitle }}
+                      </div>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:28px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#46423a;">
+              {% block content %}{% endblock %}
+
+              {% block cta %}
+                {% if cta_url %}
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 8px;">
+                    <tr>
+                      <td style="background:#0b4f3a;border-radius:9px;">
+                        <a href="{{ cta_url }}"
+                           style="display:inline-block;padding:12px 22px;font-family:Helvetica,Arial,sans-serif;font-size:14px;font-weight:700;color:#f4f1ea;text-decoration:none;">
+                          {{ cta_label }}
+                        </a>
+                      </td>
+                    </tr>
+                  </table>
+                  <p style="margin:12px 0 0;font-size:12px;color:#8a8478;">
+                    If the button doesn't work, copy this link into your browser:<br>
+                    <span style="color:#0b4f3a;word-break:break-all;">{{ cta_url }}</span>
+                  </p>
+                {% endif %}
+              {% endblock %}
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="border-top:1px solid #ece7db;background:#f7f3ea;padding:18px 28px;
+                       font-family:Helvetica,Arial,sans-serif;font-size:12px;color:#6f6b62;">
+              {% block footer %}
+                {% if contact_line %}<div>{{ contact_line }}</div>{% endif %}
+                <div style="padding-top:6px;color:#8a8478;">
+                  Sent by {{ brand_name }} on CooperativeOS. Figures derive from an
+                  immutable double-entry ledger.
+                </div>
+              {% endblock %}
+            </td>
+          </tr>
+        </table>
+
+        <div style="max-width:560px;padding:14px 8px;font-family:Helvetica,Arial,sans-serif;font-size:11px;color:#a39d90;">
+          You are receiving this because you have an account with {{ brand_name }}.
+        </div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

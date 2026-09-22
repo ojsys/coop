@@ -97,6 +97,20 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
             qs = qs.filter(status=status)
         return qs
 
+    def perform_create(self, serializer):
+        """Create the member, then invite them to set their own password.
+
+        The invitation carries a set-password link rather than a generated
+        password — a password mailed in plaintext lives forever in an inbox.
+        Delivery never blocks the member being created.
+        """
+        membership = serializer.save()
+        # Imported here: communications imports accounts.models, so a
+        # module-level import would close a cycle at app-loading time.
+        from communications.email import send_welcome_email
+
+        send_welcome_email(membership)
+
     @action(detail=True, methods=["get"])
     def statement(self, request, pk=None):
         """The member's dated ledger statement with running balance.

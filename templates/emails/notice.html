@@ -1,0 +1,11 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}{{ subject }}{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello {{ full_name }},</p>
+
+  {# Announcement and transactional bodies are plain text authored by an
+     officer, so preserve their line breaks rather than collapsing them. #}
+  <div style="margin:0;white-space:pre-line;">{{ message }}</div>
+{% endblock %}

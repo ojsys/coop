@@ -10,6 +10,13 @@ from accounts.member_views import (
     MemberLoanViewSet, MemberProfileView, MemberSavingsGoalViewSet,
     MemberSavingsProductViewSet,
 )
+from accounts.auth_views import (
+    PasswordResetConfirmView, PasswordResetRequestView,
+)
+from accounts.join_views import (
+    CooperativeApplicationView, JoinRequestCreateView, JoinRequestViewSet,
+    PublicSocietySearchView,
+)
 from accounts.views import (
     MemberDocumentViewSet, MembershipViewSet, MeView, RoleViewSet,
 )
@@ -34,6 +41,7 @@ from platform_admin.views import (
     OnboardingItemViewSet, PlanViewSet, PlatformTeamViewSet,
     ProviderStatusViewSet, SubscriptionViewSet, SupportTicketViewSet,
 )
+from core.public_views import PublicBrandingView, PublicPlansView
 from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
 from savings.views import SavingsGoalViewSet, SavingsProductViewSet
@@ -72,6 +80,7 @@ router.register("loans", LoanViewSet, basename="loan")
 router.register("loan-repayments", LoanRepaymentViewSet,
                 basename="loan-repayment")
 router.register("approvals", ApprovalRequestViewSet, basename="approval")
+router.register("join-requests", JoinRequestViewSet, basename="join-request")
 
 # Member self-service (scoped to the requesting member's own records)
 router.register("me/documents", MemberDocumentSelfViewSet,
@@ -103,7 +112,21 @@ router.register("notification-templates", NotificationTemplateViewSet,
 
 urlpatterns = [
     path("auth/token/", obtain_auth_token, name="api-token"),
+    path("auth/password-reset/", PasswordResetRequestView.as_view(),
+         name="password-reset"),
+    path("auth/password-reset/confirm/", PasswordResetConfirmView.as_view(),
+         name="password-reset-confirm"),
     path("reference/", ReferenceView.as_view(), name="reference"),
+    # Unauthenticated, for the public marketing site.
+    path("public/branding/", PublicBrandingView.as_view(),
+         name="public-branding"),
+    path("public/plans/", PublicPlansView.as_view(), name="public-plans"),
+    path("public/societies/", PublicSocietySearchView.as_view(),
+         name="public-societies"),
+    path("public/apply/", CooperativeApplicationView.as_view(),
+         name="public-apply"),
+    path("public/join/", JoinRequestCreateView.as_view(),
+         name="public-join"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
     path("webhooks/paystack/", PaystackWebhookView.as_view(),
          name="webhook-paystack"),

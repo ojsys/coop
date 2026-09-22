@@ -90,7 +90,7 @@ def record_contribution(
         ],
     )
 
-    return Contribution.objects.create(
+    contribution = Contribution.objects.create(
         cooperative=cooperative,
         membership=membership,
         contribution_type=contribution_type,
@@ -102,6 +102,18 @@ def record_contribution(
         occurred_at=occurred_at,
         journal=journal,
     )
+
+    # A receipt is worth little if sending it can undo the payment, so it goes
+    # out only once the transaction commits.
+    transaction.on_commit(lambda: _receipt(contribution))
+    return contribution
+
+
+def _receipt(contribution):
+    """Email the member their receipt. Never raises — see communications."""
+    from communications.receipts import send_contribution_receipt
+
+    send_contribution_receipt(contribution)
 
 
 @transaction.atomic
@@ -190,6 +202,9 @@ def confirm_contribution(contribution, *, recorded_by=None):
     contribution.status = Contribution.Status.CONFIRMED
     contribution.journal = journal
     contribution.save(update_fields=["status", "journal", "updated_at"])
+
+    # The member paid online; this is the first confirmation they receive.
+    transaction.on_commit(lambda: _receipt(contribution))
     return contribution
 
 

@@ -92,6 +92,13 @@ REST_FRAMEWORK = {
     # Logs every API failure before returning DRF's normal response. Without
     # this, 4xx responses never reach any logger (see core/exception_handler).
     'EXCEPTION_HANDLER': 'core.exception_handler.logging_exception_handler',
+    # Applied per-view via ScopedRateThrottle, not globally. Password reset is
+    # unauthenticated and emails a third party, so it is abusable on two counts.
+    'DEFAULT_THROTTLE_RATES': {
+        'password_reset': '5/hour',
+        # Public signup writes rows and sends mail on behalf of a stranger.
+        'signup': '10/hour',
+    },
 }
 
 # HTTP header the client sends to select the active cooperative (tenant).
@@ -131,6 +138,11 @@ WHITE_LABEL_CNAME_TARGET = os.environ.get(
 DEFAULT_FROM_EMAIL = os.environ.get(
     'DEFAULT_FROM_EMAIL', 'CooperativeOS <no-reply@cooperativeos.africa>',
 )
+
+# Absolute base for links inside emails. Email clients have no notion of the
+# request, so a relative password-reset link is worthless — this must be set to
+# the public origin in production.
+SITE_URL = os.environ.get('SITE_URL', 'http://localhost:5173')
 
 ROOT_URLCONF = 'config.urls'
 

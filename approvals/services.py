@@ -36,9 +36,33 @@ def submit_request(*, cooperative, action, object_id, requested_by, note=""):
     from approvals.models import ApprovalRequest
 
     _, summary = _resolve(cooperative, action, object_id)
-    return ApprovalRequest.objects.create(
+    request_obj = ApprovalRequest.objects.create(
         cooperative=cooperative, action=action, object_id=object_id,
         summary=summary, requested_by=requested_by, note=note)
+
+    # Maker-checker only works if the checker knows they are needed. Sent after
+    # commit so a mail failure cannot undo the submitted request.
+    transaction.on_commit(lambda: _alert_officers(request_obj))
+    return request_obj
+
+
+def _alert_officers(request_obj):
+    from communications.receipts import notify_officers_by_email
+
+    notify_officers_by_email(
+        request_obj.cooperative,
+        subject=f"Approval needed: {request_obj.get_action_display()}",
+        heading="An action is waiting for approval",
+        intro="Segregation of duties applies — whoever submitted this cannot "
+              "approve it, so another officer must decide.",
+        rows=[
+            ("Action", request_obj.get_action_display()),
+            ("Details", request_obj.summary or "—"),
+            ("Submitted by", getattr(request_obj.requested_by, "full_name",
+                                     "—")),
+            ("Note", request_obj.note or "—"),
+        ],
+    )
 
 
 @transaction.atomic

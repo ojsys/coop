@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 
-from django.core.mail import send_mail
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -41,12 +40,24 @@ def _audience(announcement) -> list:
 
 
 def _send_email(member, subject, body) -> bool:
+    """Deliver one notification, branded as the member's own society.
+
+    Failures are logged rather than swallowed. The previous implementation
+    passed ``fail_silently=True``, which made a wrong SMTP password look
+    exactly like working mail.
+    """
+    from communications.email import send_branded_email
+
     email = member.user.email
     if not email:
         return False
-    send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [email],
-              fail_silently=True)
-    return True
+    return send_branded_email(
+        to=email,
+        subject=subject,
+        template="emails/notice.html",
+        cooperative=member.cooperative,
+        context={"full_name": member.user.full_name, "message": body},
+    )
 
 
 def _send_sms(member, body) -> bool:  # pragma: no cover - provider stub

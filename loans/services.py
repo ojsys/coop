@@ -92,14 +92,24 @@ def _notify_repayment(loan, amount):
     else:
         body = (f"We received {_money(amount)} toward your {loan.product.name}. "
                 f"Outstanding balance: {_money(loan.outstanding)}.")
+    # In-app carries the short version; the emailed receipt carries the figures
+    # the member keeps, so suppress the duplicate plain email here.
     notify_member(loan.membership, kind=Notification.Kind.LOAN,
-                  title="Repayment received", body=body)
+                  title="Repayment received", body=body, email=False)
+
+    from communications.receipts import send_loan_repayment_receipt
+    send_loan_repayment_receipt(loan, amount)
 
 
-def _notify_officers(coop, *, title, body):
-    """In-app notify every privileged (officer) member of the cooperative."""
+def _notify_officers(coop, *, title, body, rows=None):
+    """Alert every privileged (officer) member — in-app and by email.
+
+    In-app alone was not enough: an officer who doesn't open the console has no
+    idea a member is waiting on them.
+    """
     from accounts.models import Membership
     from communications.models import Notification
+    from communications.receipts import notify_officers_by_email
     from communications.services import notify
 
     officers = [
@@ -110,6 +120,9 @@ def _notify_officers(coop, *, title, body):
     ]
     for member in officers:
         notify(member, kind=Notification.Kind.LOAN, title=title, body=body)
+
+    notify_officers_by_email(coop, subject=title, heading=title,
+                             intro=body, rows=rows or [])
 
 
 def _money(value) -> str:

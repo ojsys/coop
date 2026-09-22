@@ -24,7 +24,7 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import MemberDocument, Membership, User
+from accounts.models import JoinRequest, MemberDocument, Membership, User
 from approvals.models import ApprovalRequest
 from audit.models import AuditLog
 from communications.models import Announcement, ChannelPreference, Notification
@@ -157,6 +157,10 @@ def dataset(coop, member, dues_type, member_funds):
         ProviderAccount.objects.create(
             provider=Provider.PAYSTACK, subaccount_code="ACCT_test123",
             bank_name="GTBank",
+        )
+        JoinRequest.objects.create(
+            full_name="Tunde Bello", email="tunde@example.com",
+            phone="08031111111", message="I was introduced by my cousin.",
         )
 
     PaymentEvent.all_objects.create(

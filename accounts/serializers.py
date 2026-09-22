@@ -12,6 +12,14 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
     cooperative_id = serializers.IntegerField(source="cooperative.id")
     cooperative_name = serializers.CharField(source="cooperative.name")
     cooperative_slug = serializers.CharField(source="cooperative.slug")
+    # The society's own branding, so each surface can wear it rather than the
+    # CooperativeOS mark. Null until an officer uploads one.
+    cooperative_logo = serializers.ImageField(source="cooperative.logo",
+                                              read_only=True)
+    cooperative_favicon = serializers.ImageField(source="cooperative.favicon",
+                                                 read_only=True)
+    cooperative_brand_color = serializers.CharField(
+        source="cooperative.brand_color", read_only=True)
     role_slug = serializers.CharField(source="role.slug", default=None)
     role_name = serializers.CharField(source="role.name", default=None)
     is_privileged = serializers.SerializerMethodField()
@@ -19,7 +27,9 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
     class Meta:
         model = Membership
         fields = ["id", "cooperative_id", "cooperative_name",
-                  "cooperative_slug", "member_no", "role_slug", "role_name",
+                  "cooperative_slug", "cooperative_logo",
+                  "cooperative_favicon", "cooperative_brand_color",
+                  "member_no", "role_slug", "role_name",
                   "is_privileged", "status", "share_capital"]
 
     def get_is_privileged(self, obj) -> bool:

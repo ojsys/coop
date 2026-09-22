@@ -214,3 +214,9 @@ class MemberDocument(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.get_doc_type_display()} — {self.membership.member_no}"
+
+
+# Join requests live in their own module for readability. Imported here because
+# Django's app registry only discovers models reachable from <app>/models.py —
+# without this line the model exists but no migration is ever generated for it.
+from accounts.join_models import JoinRequest  # noqa: E402,F401

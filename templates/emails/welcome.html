@@ -1,0 +1,28 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Your {{ brand_name }} account is ready — set your password to sign in.{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello {{ full_name }},</p>
+
+  <p style="margin:0 0 14px;">
+    An account has been created for you at <strong>{{ brand_name }}</strong>
+    {% if member_no %}with member number
+      <span style="font-family:'Courier New',monospace;color:#1b1a17;">{{ member_no }}</span>{% endif %}.
+  </p>
+
+  <p style="margin:0 0 14px;">
+    Set your own password to sign in. We never send passwords by email — this
+    link lets you choose one yourself.
+  </p>
+
+  <p style="margin:0;">
+    The link expires in <strong>{{ timeout_hours }} hours</strong>. If it lapses,
+    use “Forgot password” on the sign-in page to request a fresh one.
+  </p>
+
+  <p style="margin:18px 0 0;color:#6f6b62;font-size:13px;">
+    Through your account you can see your contributions and savings, download
+    statements, follow loan applications and vote in resolutions.
+  </p>
+{% endblock %}

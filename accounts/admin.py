@@ -25,7 +25,9 @@ from django.db.models import DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 from django.utils.html import format_html
 
-from accounts.models import MemberDocument, Membership, Role, User
+from accounts.models import (
+    JoinRequest, MemberDocument, Membership, Role, User,
+)
 from core.admin import (TenantScopedModelAdmin, TenantScopedTabularInline,
                         TwoFactorRequiredMixin)
 from ledger.models import Account
@@ -184,6 +186,35 @@ class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
             '<img src="{}" alt="" style="max-height:160px;border-radius:4px">',
             obj.photo.url,
         )
+
+
+@admin.register(JoinRequest)
+class JoinRequestAdmin(TenantScopedModelAdmin):
+    """A viewer, not an editor.
+
+    Approving a request creates a User and a Membership and emails a
+    set-password link — all of that lives in accounts.join_services. Flipping
+    `status` here would mark someone admitted without admitting them, so the
+    decision belongs in the console, and this stays read-only.
+    """
+
+    list_display = ("full_name", "email", "cooperative", "status",
+                    "created_at", "decided_by", "decided_at")
+    list_filter = ("status", "cooperative", "created_at")
+    search_fields = ("full_name", "email", "phone", "message")
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+    list_select_related = ("cooperative", "decided_by", "membership")
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(f.name for f in self.model._meta.fields) + ("membership",)
+
+    def has_add_permission(self, request):
+        # Requests arrive from the public join form.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(MemberDocument)

@@ -110,6 +110,40 @@ def test_platform_profile_still_accepts_json(platform_client):
     assert profile.support_phone == "08030000000"
 
 
+# ── Branding reaches the app shells ─────────────────────────────────────────
+def test_me_endpoint_carries_society_branding(coop, member):
+    """The shells white-label themselves from /me/, so it must carry the logo.
+
+    Uploading a logo is useless if nothing downstream can read it — this is the
+    gap that left an uploaded logo invisible everywhere but the Settings page.
+    """
+    coop.logo = _png()
+    coop.favicon = _png(color=(217, 158, 43), size=(32, 32))
+    coop.save(update_fields=["logo", "favicon"])
+
+    client = APIClient()
+    client.force_authenticate(member.user)
+    resp = client.get("/api/v1/me/")
+
+    assert resp.status_code == 200
+    summary = resp.data["memberships"][0]
+    assert summary["cooperative_logo"], "the shell cannot render a logo it isn't sent"
+    assert summary["cooperative_favicon"]
+    assert summary["cooperative_brand_color"] == coop.brand_color
+
+
+def test_me_endpoint_tolerates_a_society_with_no_logo(coop, member):
+    """Branding is optional — the payload must not break without it."""
+    client = APIClient()
+    client.force_authenticate(member.user)
+    resp = client.get("/api/v1/me/")
+
+    assert resp.status_code == 200
+    summary = resp.data["memberships"][0]
+    assert summary["cooperative_logo"] is None
+    assert summary["cooperative_favicon"] is None
+
+
 # ── Statements ──────────────────────────────────────────────────────────────
 def test_statement_pdf_renders_with_a_logo(coop, member):
     coop.logo = _png()
