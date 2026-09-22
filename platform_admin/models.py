@@ -345,7 +345,17 @@ class PlatformProfile(TimeStampedModel):
 
     name = models.CharField(max_length=120, default="Startup Ripple")
     brand_color = models.CharField(max_length=7, default="#0b4f3a")
+    logo = models.ImageField(
+        upload_to="platform_brand/", null=True, blank=True,
+        help_text="The platform's own mark, used where no cooperative brand "
+                  "applies (sign-in, platform console, default emails).",
+    )
+    favicon = models.ImageField(
+        upload_to="platform_brand/", null=True, blank=True,
+        help_text="Square mark for the browser tab.",
+    )
     support_email = models.EmailField(default="support@cooperativeos.africa")
+    support_phone = models.CharField(max_length=20, blank=True)
     default_currency = models.CharField(max_length=3,
                                         default=settings.DEFAULT_CURRENCY)
     default_timezone = models.CharField(max_length=40, default="Africa/Lagos")

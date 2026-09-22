@@ -44,7 +44,24 @@ class Cooperative(TimeStampedModel):
     )
     # Branding (design uses a green/gold theme; coops may override).
     brand_color = models.CharField(max_length=7, default="#0b4f3a")
+    logo = models.ImageField(
+        upload_to="coop_logos/", null=True, blank=True,
+        help_text="Shown in the member app, the console header and at the top "
+                  "of generated statements.",
+    )
+    favicon = models.ImageField(
+        upload_to="coop_favicons/", null=True, blank=True,
+        help_text="Square mark for the browser tab and the member PWA icon.",
+    )
     member_cap = models.PositiveIntegerField(default=5000)
+
+    # Public contact details — shown to members and printed on statements.
+    # Distinct from any officer's personal details on their User record.
+    contact_email = models.EmailField(blank=True)
+    contact_phone = models.CharField(max_length=20, blank=True)
+    contact_address = models.CharField(max_length=255, blank=True)
+    # Replaces the default line at the foot of statements/receipts when set.
+    statement_footer = models.CharField(max_length=255, blank=True)
     # The society's own collection account — shown to members who prefer to repay
     # loans (or pay dues) by direct bank transfer instead of an online gateway.
     bank_name = models.CharField(max_length=120, blank=True)

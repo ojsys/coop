@@ -1,0 +1,1 @@
+{"name":"CooperativeOS","short_name":"CoopOS","description":"Your cooperative — contributions, savings, statements and voting.","start_url":"/app","display":"standalone","background_color":"#0b4f3a","theme_color":"#0b4f3a","lang":"en","scope":"/app","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}

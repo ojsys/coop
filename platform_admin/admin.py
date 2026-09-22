@@ -8,6 +8,7 @@ the platform and aggregate across every cooperative — so they use plain
 from __future__ import annotations
 
 from django.contrib import admin, messages
+from django.utils.html import format_html
 
 from platform_admin.models import (Domain, Incident, Invoice,
                                    NotificationTemplate, OnboardingItem, Plan,
@@ -156,7 +157,41 @@ class SupportTicketAdmin(admin.ModelAdmin):
 class PlatformProfileAdmin(admin.ModelAdmin):
     list_display = ("name", "support_email", "default_currency",
                     "default_timezone", "brand_color")
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("logo_preview", "favicon_preview", "created_at",
+                       "updated_at")
+
+    fieldsets = (
+        (None, {"fields": ("name", "support_email", "support_phone")}),
+        ("Branding", {
+            "fields": ("brand_color", "logo", "logo_preview",
+                       "favicon", "favicon_preview"),
+        }),
+        ("Defaults applied to new cooperatives", {
+            "fields": ("default_currency", "default_timezone"),
+        }),
+        ("Timestamps", {
+            "classes": ("collapse",),
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    @admin.display(description="Logo preview")
+    def logo_preview(self, obj):
+        if not obj.logo:
+            return "—"
+        return format_html(
+            '<img src="{}" alt="" style="max-height:72px;border-radius:6px;'
+            'background:#f4f1ea;padding:4px">', obj.logo.url,
+        )
+
+    @admin.display(description="Favicon preview")
+    def favicon_preview(self, obj):
+        if not obj.favicon:
+            return "—"
+        return format_html(
+            '<img src="{}" alt="" style="height:32px;width:32px;'
+            'border-radius:6px">', obj.favicon.url,
+        )
 
     def has_add_permission(self, request):
         # Singleton — one platform profile, loaded via PlatformProfile.load().

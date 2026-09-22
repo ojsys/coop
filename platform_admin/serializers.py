@@ -115,8 +115,8 @@ class ProviderStatusSerializer(serializers.ModelSerializer):
 class PlatformProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlatformProfile
-        fields = ["name", "brand_color", "support_email", "default_currency",
-                  "default_timezone"]
+        fields = ["name", "brand_color", "logo", "favicon", "support_email",
+                  "support_phone", "default_currency", "default_timezone"]
 
 
 class NotificationTemplateSerializer(serializers.ModelSerializer):
