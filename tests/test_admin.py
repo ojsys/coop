@@ -15,9 +15,11 @@ These guard the properties that are easy to break silently:
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from django.apps import apps
+from django.conf import settings
 from django.contrib import admin
 from django.contrib.messages.storage.fallback import FallbackStorage
 from django.test import RequestFactory
@@ -458,6 +460,41 @@ def test_admin_header_falls_back_when_no_logo_is_uploaded(dataset,
     html = admin_client_2fa.get(reverse("admin:index")).content.decode()
     assert "coop-logo" in html
     assert "<svg" in html, "the built-in mark is the fallback"
+
+
+def test_admin_theme_handles_the_default_auto_colour_scheme():
+    """Dark handling must live in the token blocks, not per-rule overrides.
+
+    Django defaults to <html data-theme="auto">, which matches neither
+    [data-theme="light"] nor [data-theme="dark"]. With a dark OS the palette
+    flips through the media query, but any rule keyed on
+    html[data-theme="dark"] never fires — so hardcoding a light colour in a
+    chrome rule renders dark text on a dark background. That is exactly the bug
+    this guards against.
+    """
+    import re
+
+    css = (Path(settings.BASE_DIR) / "core" / "static" / "cooperativeos"
+           / "admin.css").read_text(encoding="utf-8")
+    # The file's own comments discuss this very selector, so strip them before
+    # matching or the guard flags its own documentation.
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+
+    # The dark token block must not lose to an explicit light choice.
+    assert ':root:not([data-theme="light"])' in css, (
+        "the media-query dark block should exclude an explicit light theme"
+    )
+
+    # html[data-theme="dark"] may define tokens — that block is written
+    # `html[data-theme="dark"] {`, with nothing between selector and brace.
+    # What it must never do is key a *chrome* rule, i.e. carry a descendant
+    # selector, because those are invisible under data-theme="auto".
+    descendant_overrides = re.findall(
+        r'html\[data-theme="dark"\][ \t]+[^{\s][^{]*\{', css)
+    assert descendant_overrides == [], (
+        "these rules never apply under data-theme=auto; use a semantic token "
+        f"redefined in every block instead: {descendant_overrides[:5]}"
+    )
 
 
 def test_branding_renders_the_cooperativeos_wordmark(dataset, admin_client_2fa):
