@@ -45,7 +45,7 @@ SECRET_KEY = _require('DJANGO_SECRET_KEY')
 
 DEBUG = False
 
-# Comma-separated list, e.g. "app.cooperativeos.africa,www.cooperativeos.africa"
+# Comma-separated list, e.g. "mycooperativeos.com,www.mycooperativeos.com"
 ALLOWED_HOSTS = _csv('DJANGO_ALLOWED_HOSTS') or None
 if not ALLOWED_HOSTS:
     raise ImproperlyConfigured(

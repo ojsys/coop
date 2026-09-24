@@ -115,18 +115,39 @@ def test_smtp_without_credentials_is_flagged(settings, monkeypatch):
     assert "EMAIL_HOST_USER" in warnings[0].msg
 
 
-def test_unset_from_address_is_flagged(settings, monkeypatch):
-    """The commonest cause of silent non-delivery: an unverified sender."""
+def test_the_support_address_is_on_the_sites_own_domain():
+    """The footer's "Talk to us" link has to reach somebody.
+
+    The profile row predates this address and carries whatever default was in
+    force when it was created, so the model default alone is not enough — a
+    data migration moves existing rows. This pins the default itself.
+    """
+    from platform_admin.models import PlatformProfile
+
+    default = PlatformProfile._meta.get_field("support_email").default
+    assert default.endswith("@mycooperativeos.com"), default
+
+
+def test_the_bundled_default_sender_matches_the_site(settings, monkeypatch):
+    """Leaving DEFAULT_FROM_EMAIL unset must be safe, not a silent trap.
+
+    The default is the deployment's own address, so an unset env var is fine —
+    which is only true while the two stay in step. If the default is ever
+    changed to a foreign domain, this fails rather than mail quietly stopping.
+    """
     from core.checks import email_delivery_configured
 
     settings.EMAIL_BACKEND = SMTP
     settings.EMAIL_HOST = "smtp-relay.brevo.com"
     settings.EMAIL_HOST_USER = "user"
     settings.EMAIL_HOST_PASSWORD = "secret"
+    settings.SITE_URL = "https://mycooperativeos.com"
     monkeypatch.delenv("DEFAULT_FROM_EMAIL", raising=False)
 
-    ids = [w.id for w in email_delivery_configured(None)]
-    assert "core.W003" in ids
+    assert email_delivery_configured(None) == [], (
+        f"the default sender {settings.DEFAULT_FROM_EMAIL!r} no longer matches "
+        f"the site domain"
+    )
 
 
 def test_a_foreign_sending_domain_is_flagged(settings, monkeypatch):

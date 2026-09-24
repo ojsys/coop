@@ -86,8 +86,9 @@ class DomainSerializer(serializers.ModelSerializer):
         """The exact DNS record a cooperative admin must add, in plain terms."""
         from django.conf import settings
 
-        target = getattr(settings, "WHITE_LABEL_CNAME_TARGET",
-                         "tenants.cooperativeos.africa")
+        # No fallback: settings always defines this, and a second copy of the
+        # value here is how it drifted out of step in the first place.
+        target = settings.WHITE_LABEL_CNAME_TARGET
         return {
             "record_type": "CNAME",
             "host": obj.domain,

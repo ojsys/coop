@@ -129,14 +129,21 @@ FLUTTERWAVE_SECRET_HASH = os.environ.get(
 
 # --- White-label -----------------------------------------------------------
 # CNAME target cooperatives point their custom domains at.
+# Cooperatives point their own domain's CNAME at this host, so it must be one
+# we actually control AND one that resolves: changing this line does not create
+# the DNS record. `tenants.mycooperativeos.com` needs an A record (or CNAME) of
+# its own aimed at this server before any white-label domain can go live.
 WHITE_LABEL_CNAME_TARGET = os.environ.get(
-    'WHITE_LABEL_CNAME_TARGET', 'tenants.cooperativeos.africa',
+    'WHITE_LABEL_CNAME_TARGET', 'tenants.mycooperativeos.com',
 )
 
 # --- Messaging -------------------------------------------------------------
 # The email *backend* is chosen per environment (console in dev, SMTP in prod).
+# Must be an address the relay has verified: Brevo (and every other relay)
+# accepts a message and only then checks whether you may send as this address,
+# so an unverified sender fails silently — see core.checks.core.W004.
 DEFAULT_FROM_EMAIL = os.environ.get(
-    'DEFAULT_FROM_EMAIL', 'CooperativeOS <no-reply@cooperativeos.africa>',
+    'DEFAULT_FROM_EMAIL', 'CooperativeOS <info@mycooperativeos.com>',
 )
 
 # Absolute base for links inside emails. Email clients have no notion of the

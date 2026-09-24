@@ -19,8 +19,9 @@ class ReferenceView(APIView):
             "states": states_payload(),
             "coop_types": COOP_TYPES,
             "white_label": {
-                "cname_target": getattr(
-                    settings, "WHITE_LABEL_CNAME_TARGET",
-                    "tenants.cooperativeos.africa"),
+                # Read straight from settings. A defensive default here would
+                # be a second place for this value to live — which is exactly
+                # how it drifted onto a domain the platform no longer uses.
+                "cname_target": settings.WHITE_LABEL_CNAME_TARGET,
             },
         })

@@ -42,6 +42,39 @@ def test_reference_endpoint(api):
     assert body["white_label"]["cname_target"]
 
 
+def test_the_cname_target_is_a_host_we_control():
+    """Cooperatives aim their own DNS at this, so it cannot be someone else's.
+
+    It sat on a domain the platform does not own for a long time, which made
+    every white-label domain configured against it resolve nowhere.
+    """
+    from django.conf import settings
+
+    assert settings.WHITE_LABEL_CNAME_TARGET.endswith("mycooperativeos.com"), (
+        settings.WHITE_LABEL_CNAME_TARGET
+    )
+
+
+def test_dns_instructions_follow_the_configured_target(settings, coop):
+    """Nothing may shadow the setting.
+
+    This value used to be repeated as a defensive default at both call sites,
+    where it could never actually be reached — so the copies sat there quietly
+    disagreeing with settings, which is how the target ended up naming a domain
+    the platform does not own.
+    """
+    from platform_admin.models import Domain
+    from platform_admin.serializers import DomainSerializer
+
+    settings.WHITE_LABEL_CNAME_TARGET = "tenants.example.test"
+    domain = Domain.objects.create(cooperative=coop, domain="my.example.coop")
+
+    verification = DomainSerializer(domain).data["verification"]
+    assert verification["record_type"] == "CNAME"
+    assert verification["target"] == "tenants.example.test"
+    assert "tenants.example.test" in verification["instructions"]
+
+
 def test_reference_requires_auth():
     assert APIClient().get("/api/v1/reference/").status_code in (401, 403)
 

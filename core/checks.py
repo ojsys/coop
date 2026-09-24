@@ -28,8 +28,6 @@ def email_delivery_configured(app_configs, **kwargs):
     Only meaningful for the SMTP backend — under the console backend in
     development, sending nothing is the point.
     """
-    import os
-
     from django.conf import settings
 
     backend = getattr(settings, "EMAIL_BACKEND", "")
@@ -93,25 +91,10 @@ def email_delivery_configured(app_configs, **kwargs):
             )
         )
 
-    # Keyed on whether it was configured at all, not on the address itself:
-    # the bundled default may legitimately be the deployment's own domain.
-    if os.environ.get("DEFAULT_FROM_EMAIL") is None:
-        problems.append(
-            Warning(
-                "DEFAULT_FROM_EMAIL is not set, so mail goes out as "
-                f"{settings.DEFAULT_FROM_EMAIL!r}.",
-                hint=(
-                    "Relays refuse to send on behalf of an address they have "
-                    "not verified, and reject it at SMTP time — which is the "
-                    "most common reason mail silently never arrives. Set "
-                    "DEFAULT_FROM_EMAIL to a sender you have verified with "
-                    "your relay, and add SPF and DKIM records for its domain "
-                    "so it is not then filtered as spam."
-                ),
-                id="core.W003",
-            )
-        )
-
+    # There is deliberately no warning for "DEFAULT_FROM_EMAIL is unset". The
+    # bundled default is the deployment's own address, so relying on it is
+    # fine; and if this code is ever deployed under a different domain, the
+    # mismatch check above catches it with a far more useful message.
     return problems
 
 

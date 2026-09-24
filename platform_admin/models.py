@@ -354,7 +354,9 @@ class PlatformProfile(TimeStampedModel):
         upload_to="platform_brand/", null=True, blank=True,
         help_text="Square mark for the browser tab.",
     )
-    support_email = models.EmailField(default="support@cooperativeos.africa")
+    # Shown in the public site's footer and behind every "Talk to us" link, so
+    # it has to be an address that actually receives mail.
+    support_email = models.EmailField(default="info@mycooperativeos.com")
     support_phone = models.CharField(max_length=20, blank=True)
     default_currency = models.CharField(max_length=3,
                                         default=settings.DEFAULT_CURRENCY)
