@@ -13,8 +13,9 @@ from django.utils.html import format_html
 from platform_admin.models import (Domain, Incident, Invoice,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
-                                   ProviderCheck, ProviderStatus,
-                                   Subscription, SupportTicket)
+                                   ProviderCheck, ProviderStatus, SiteContent,
+                                   SiteFeature, SiteGalleryImage, SiteStep,
+                                   SiteTrustBadge, Subscription, SupportTicket)
 
 
 # ── Billing ────────────────────────────────────────────────────────────────
@@ -209,6 +210,140 @@ class NotificationTemplateAdmin(admin.ModelAdmin):
     ordering = ("name",)
     prepopulated_fields = {"key": ("name",)}
     readonly_fields = ("created_at", "updated_at")
+
+
+# ── Public site content (the CMS) ───────────────────────────────────────────
+# These screens are used by non-technical staff, so they are organised by
+# where things appear on the page rather than by model structure, and every
+# field carries help text written for someone who has never seen the code.
+@admin.register(SiteContent)
+class SiteContentAdmin(admin.ModelAdmin):
+    list_display = ("__str__", "hero_title", "updated_at")
+    readonly_fields = ("hero_image_preview", "created_at", "updated_at")
+
+    fieldsets = (
+        ("Top of the page (hero)", {
+            "description": "The first thing a visitor reads.",
+            "fields": ("hero_eyebrow", "hero_title", "hero_subtitle",
+                       "hero_primary_cta", "hero_secondary_cta",
+                       "hero_image", "hero_image_preview", "hero_image_alt"),
+        }),
+        ("The green band", {
+            "fields": ("principle_eyebrow", "principle_title",
+                       "principle_body"),
+        }),
+        ("Section headings", {
+            "description": "Headings only — the cards, steps and photos "
+                           "themselves are edited on their own screens.",
+            "fields": ("features_title", "features_intro", "steps_title",
+                       "gallery_title", "gallery_intro"),
+        }),
+        ("Pricing", {
+            "description": "Prices come from the Plans table and are never "
+                           "typed here, so published pricing cannot drift "
+                           "from what societies are actually billed.",
+            "fields": ("pricing_title", "pricing_intro", "pricing_fallback"),
+        }),
+        ("Footer", {"fields": ("footer_tagline", "footer_disclaimer")}),
+        ("Search engines & link previews", {
+            "classes": ("collapse",),
+            "fields": ("meta_title", "meta_description"),
+        }),
+        ("Timestamps", {
+            "classes": ("collapse",),
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    @admin.display(description="Current hero image")
+    def hero_image_preview(self, obj):
+        if not obj.hero_image:
+            return "No image — the page shows a plain panel instead."
+        return format_html(
+            '<img src="{}" alt="" style="max-height:160px;max-width:100%;'
+            'border-radius:8px">', obj.hero_image.url,
+        )
+
+    def has_add_permission(self, request):
+        # Singleton — one public site, loaded via SiteContent.load().
+        return not SiteContent.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SiteFeature)
+class SiteFeatureAdmin(admin.ModelAdmin):
+    list_display = ("title", "icon", "order", "visible")
+    list_editable = ("order", "visible")
+    list_filter = ("visible",)
+    search_fields = ("title", "body")
+    ordering = ("order", "id")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SiteStep)
+class SiteStepAdmin(admin.ModelAdmin):
+    list_display = ("number", "title", "order", "visible")
+    list_editable = ("order", "visible")
+    list_filter = ("visible",)
+    search_fields = ("title", "body")
+    ordering = ("order", "id")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SiteTrustBadge)
+class SiteTrustBadgeAdmin(admin.ModelAdmin):
+    list_display = ("text", "icon", "order", "visible")
+    list_editable = ("order", "visible")
+    list_filter = ("visible",)
+    search_fields = ("text",)
+    ordering = ("order", "id")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(SiteGalleryImage)
+class SiteGalleryImageAdmin(admin.ModelAdmin):
+    list_display = ("thumbnail", "alt_text", "caption", "order", "visible")
+    list_display_links = ("thumbnail", "alt_text")
+    list_editable = ("order", "visible")
+    list_filter = ("visible",)
+    search_fields = ("alt_text", "caption")
+    ordering = ("order", "id")
+    readonly_fields = ("preview", "created_at", "updated_at")
+
+    fieldsets = (
+        (None, {
+            "description": "Upload photographs you hold the rights to. Free "
+                           "options with clear licences include Pexels, "
+                           "Unsplash and Nappy — check each licence before "
+                           "publishing.",
+            "fields": ("image", "preview", "alt_text", "caption",
+                       "order", "visible"),
+        }),
+        ("Timestamps", {
+            "classes": ("collapse",),
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    @admin.display(description="")
+    def thumbnail(self, obj):
+        if not obj.image:
+            return "—"
+        return format_html(
+            '<img src="{}" alt="" style="height:44px;width:70px;'
+            'object-fit:cover;border-radius:4px">', obj.image.url,
+        )
+
+    @admin.display(description="Preview")
+    def preview(self, obj):
+        if not obj.image:
+            return "—"
+        return format_html(
+            '<img src="{}" alt="" style="max-height:220px;max-width:100%;'
+            'border-radius:8px">', obj.image.url,
+        )
 
 
 # ── Platform team ───────────────────────────────────────────────────────────

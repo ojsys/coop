@@ -16,6 +16,7 @@ from django.utils.text import slugify
 
 from accounts.join_models import JoinRequest
 from accounts.models import Membership, Role, User
+from core.reference_data import country_name
 
 logger = logging.getLogger("api.errors")
 
@@ -50,8 +51,8 @@ def _officer_emails(cooperative) -> list[str]:
 # ── A society applying to join the platform ─────────────────────────────────
 @transaction.atomic
 def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
-                          applicant_phone="", state="", lga="", coop_type="",
-                          estimated_members=0, message=""):
+                          applicant_phone="", country="", state="", lga="",
+                          coop_type="", estimated_members=0, message=""):
     """Register an application and put it into the onboarding pipeline.
 
     The society is created PROSPECTIVE, not ACTIVE: it exists so the platform
@@ -65,6 +66,7 @@ def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
         name=society_name,
         slug=_unique_slug(society_name),
         status="prospective",
+        country=country,
         state=state,
         lga=lga,
         coop_type=coop_type,
@@ -100,8 +102,9 @@ def _notify_application(*, cooperative, applicant_name, applicant_email,
         ("Society", cooperative.name),
         ("Contact", f"{applicant_name} <{applicant_email}>"),
         ("Phone", applicant_phone or "—"),
-        ("Location", " · ".join(filter(None, (cooperative.lga,
-                                              cooperative.state))) or "—"),
+        ("Location", " · ".join(filter(None, (
+            cooperative.lga, cooperative.state,
+            country_name(cooperative.country)))) or "—"),
         ("Estimated members", str(estimated_members or "not stated")),
     ]
     if message:

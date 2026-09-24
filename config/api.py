@@ -41,7 +41,10 @@ from platform_admin.views import (
     OnboardingItemViewSet, PlanViewSet, PlatformTeamViewSet,
     ProviderStatusViewSet, SubscriptionViewSet, SupportTicketViewSet,
 )
-from core.public_views import PublicBrandingView, PublicPlansView
+from core.public_views import (
+    PublicBrandingView, PublicPlansView, PublicReferenceView,
+    PublicSiteContentView, PublicSubdivisionsView,
+)
 from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
 from savings.views import SavingsGoalViewSet, SavingsProductViewSet
@@ -121,6 +124,14 @@ urlpatterns = [
     path("public/branding/", PublicBrandingView.as_view(),
          name="public-branding"),
     path("public/plans/", PublicPlansView.as_view(), name="public-plans"),
+    # Editable marketing copy and imagery, managed from the Django admin.
+    path("public/site-content/", PublicSiteContentView.as_view(),
+         name="public-site-content"),
+    # The signup form's catalogue. Public because signup is.
+    path("public/reference/", PublicReferenceView.as_view(),
+         name="public-reference"),
+    path("public/reference/subdivisions/<str:code>/",
+         PublicSubdivisionsView.as_view(), name="public-subdivisions"),
     path("public/societies/", PublicSocietySearchView.as_view(),
          name="public-societies"),
     path("public/apply/", CooperativeApplicationView.as_view(),

@@ -1,26 +1,50 @@
 """
-Static reference data for Nigeria — the 36 states + FCT, each with its capital
-and Local Government Areas — plus the cooperative-type catalogue.
+Static reference data: the country catalogue, per-country subdivisions, and
+the cooperative-type list.
 
-Served read-only via ``GET /api/v1/reference/`` so the frontend can render
-proper cascading State → LGA dropdowns instead of free-text inputs.
+Location is captured in three levels, which is the most any country here
+needs and the fewest that works everywhere:
+
+    country  ->  region     ->  locality
+    Nigeria      State          LGA
+    Kenya        County         Sub-county
+    India        State          District
+    (default)    State/Province City/District
+
+The column names on ``tenants.Cooperative`` are still ``state`` and ``lga``
+for the middle and last levels. That is deliberate: renaming them would touch
+every console form, both serializers and the ``by_state`` analytics rollup
+without changing behaviour. What varies per country is the *label*, supplied
+by :data:`LOCATION_LABELS`, not the storage.
+
+Only countries listed in :data:`SUBDIVISIONS` offer dropdowns; everywhere else
+the two lower levels are free text, which is honest — we would rather take a
+typed province name than pretend to a list we have not verified.
 """
 from __future__ import annotations
 
 # Cooperative types offered on the platform (feeds the "Type" dropdown).
+# Deliberately spans the vocabulary used in different markets: a Kenyan SACCO,
+# a North American credit union and a Nigerian thrift & credit society are all
+# the same animal, and each should be able to find its own word here.
 COOP_TYPES = [
     "Multipurpose",
     "Thrift & Credit",
+    "SACCO (Savings & Credit)",
+    "Credit Union",
     "Farmers / Agricultural",
+    "Marketing & Supply",
     "Consumer",
     "Housing",
     "Investment",
+    "Worker / Producer",
     "Artisan / Trade",
     "Transport",
     "Staff / Workers",
     "Community / Town",
     "Women / Youth",
     "Fishery",
+    "Energy / Utility",
 ]
 
 # state -> (capital, [LGAs])
@@ -253,8 +277,167 @@ NIGERIA: dict[str, tuple[str, list[str]]] = {
 
 
 def states_payload() -> list[dict]:
-    """Serialisable list of {state, capital, lgas} sorted by state name."""
+    """Serialisable list of {state, capital, lgas} sorted by state name.
+
+    Nigeria-only, kept for the authenticated ``/reference/`` endpoint the
+    console has always used. New code should prefer
+    :func:`subdivisions_payload`, which takes a country code.
+    """
     return [
         {"state": state, "capital": capital, "lgas": lgas}
         for state, (capital, lgas) in sorted(NIGERIA.items())
+    ]
+
+
+# ── Countries ───────────────────────────────────────────────────────────────
+# ISO 3166-1: (alpha-2, English short name). Stored on the cooperative as the
+# two-letter code so a rename upstream never orphans a row.
+COUNTRIES: list[tuple[str, str]] = [
+    ("AF", "Afghanistan"), ("AL", "Albania"), ("DZ", "Algeria"),
+    ("AD", "Andorra"), ("AO", "Angola"), ("AG", "Antigua and Barbuda"),
+    ("AR", "Argentina"), ("AM", "Armenia"), ("AU", "Australia"),
+    ("AT", "Austria"), ("AZ", "Azerbaijan"), ("BS", "Bahamas"),
+    ("BH", "Bahrain"), ("BD", "Bangladesh"), ("BB", "Barbados"),
+    ("BY", "Belarus"), ("BE", "Belgium"), ("BZ", "Belize"), ("BJ", "Benin"),
+    ("BT", "Bhutan"), ("BO", "Bolivia"), ("BA", "Bosnia and Herzegovina"),
+    ("BW", "Botswana"), ("BR", "Brazil"), ("BN", "Brunei"),
+    ("BG", "Bulgaria"), ("BF", "Burkina Faso"), ("BI", "Burundi"),
+    ("CV", "Cabo Verde"), ("KH", "Cambodia"), ("CM", "Cameroon"),
+    ("CA", "Canada"), ("CF", "Central African Republic"), ("TD", "Chad"),
+    ("CL", "Chile"), ("CN", "China"), ("CO", "Colombia"), ("KM", "Comoros"),
+    ("CG", "Congo"), ("CD", "Congo (Democratic Republic)"),
+    ("CR", "Costa Rica"), ("CI", "Côte d'Ivoire"), ("HR", "Croatia"),
+    ("CU", "Cuba"), ("CY", "Cyprus"), ("CZ", "Czechia"), ("DK", "Denmark"),
+    ("DJ", "Djibouti"), ("DM", "Dominica"), ("DO", "Dominican Republic"),
+    ("EC", "Ecuador"), ("EG", "Egypt"), ("SV", "El Salvador"),
+    ("GQ", "Equatorial Guinea"), ("ER", "Eritrea"), ("EE", "Estonia"),
+    ("SZ", "Eswatini"), ("ET", "Ethiopia"), ("FJ", "Fiji"),
+    ("FI", "Finland"), ("FR", "France"), ("GA", "Gabon"), ("GM", "Gambia"),
+    ("GE", "Georgia"), ("DE", "Germany"), ("GH", "Ghana"), ("GR", "Greece"),
+    ("GD", "Grenada"), ("GT", "Guatemala"), ("GN", "Guinea"),
+    ("GW", "Guinea-Bissau"), ("GY", "Guyana"), ("HT", "Haiti"),
+    ("HN", "Honduras"), ("HK", "Hong Kong"), ("HU", "Hungary"),
+    ("IS", "Iceland"), ("IN", "India"), ("ID", "Indonesia"), ("IR", "Iran"),
+    ("IQ", "Iraq"), ("IE", "Ireland"), ("IL", "Israel"), ("IT", "Italy"),
+    ("JM", "Jamaica"), ("JP", "Japan"), ("JO", "Jordan"),
+    ("KZ", "Kazakhstan"), ("KE", "Kenya"), ("KI", "Kiribati"),
+    ("KW", "Kuwait"), ("KG", "Kyrgyzstan"), ("LA", "Laos"), ("LV", "Latvia"),
+    ("LB", "Lebanon"), ("LS", "Lesotho"), ("LR", "Liberia"), ("LY", "Libya"),
+    ("LI", "Liechtenstein"), ("LT", "Lithuania"), ("LU", "Luxembourg"),
+    ("MG", "Madagascar"), ("MW", "Malawi"), ("MY", "Malaysia"),
+    ("MV", "Maldives"), ("ML", "Mali"), ("MT", "Malta"),
+    ("MH", "Marshall Islands"), ("MR", "Mauritania"), ("MU", "Mauritius"),
+    ("MX", "Mexico"), ("FM", "Micronesia"), ("MD", "Moldova"),
+    ("MC", "Monaco"), ("MN", "Mongolia"), ("ME", "Montenegro"),
+    ("MA", "Morocco"), ("MZ", "Mozambique"), ("MM", "Myanmar"),
+    ("NA", "Namibia"), ("NR", "Nauru"), ("NP", "Nepal"),
+    ("NL", "Netherlands"), ("NZ", "New Zealand"), ("NI", "Nicaragua"),
+    ("NE", "Niger"), ("NG", "Nigeria"), ("KP", "North Korea"),
+    ("MK", "North Macedonia"), ("NO", "Norway"), ("OM", "Oman"),
+    ("PK", "Pakistan"), ("PW", "Palau"), ("PS", "Palestine"),
+    ("PA", "Panama"), ("PG", "Papua New Guinea"), ("PY", "Paraguay"),
+    ("PE", "Peru"), ("PH", "Philippines"), ("PL", "Poland"),
+    ("PT", "Portugal"), ("PR", "Puerto Rico"), ("QA", "Qatar"),
+    ("RO", "Romania"), ("RU", "Russia"), ("RW", "Rwanda"),
+    ("KN", "Saint Kitts and Nevis"), ("LC", "Saint Lucia"),
+    ("VC", "Saint Vincent and the Grenadines"), ("WS", "Samoa"),
+    ("SM", "San Marino"), ("ST", "São Tomé and Príncipe"),
+    ("SA", "Saudi Arabia"), ("SN", "Senegal"), ("RS", "Serbia"),
+    ("SC", "Seychelles"), ("SL", "Sierra Leone"), ("SG", "Singapore"),
+    ("SK", "Slovakia"), ("SI", "Slovenia"), ("SB", "Solomon Islands"),
+    ("SO", "Somalia"), ("ZA", "South Africa"), ("KR", "South Korea"),
+    ("SS", "South Sudan"), ("ES", "Spain"), ("LK", "Sri Lanka"),
+    ("SD", "Sudan"), ("SR", "Suriname"), ("SE", "Sweden"),
+    ("CH", "Switzerland"), ("SY", "Syria"), ("TW", "Taiwan"),
+    ("TJ", "Tajikistan"), ("TZ", "Tanzania"), ("TH", "Thailand"),
+    ("TL", "Timor-Leste"), ("TG", "Togo"), ("TO", "Tonga"),
+    ("TT", "Trinidad and Tobago"), ("TN", "Tunisia"), ("TR", "Türkiye"),
+    ("TM", "Turkmenistan"), ("TV", "Tuvalu"), ("UG", "Uganda"),
+    ("UA", "Ukraine"), ("AE", "United Arab Emirates"),
+    ("GB", "United Kingdom"), ("US", "United States"), ("UY", "Uruguay"),
+    ("UZ", "Uzbekistan"), ("VU", "Vanuatu"), ("VA", "Vatican City"),
+    ("VE", "Venezuela"), ("VN", "Vietnam"), ("YE", "Yemen"),
+    ("ZM", "Zambia"), ("ZW", "Zimbabwe"),
+]
+
+# What the two lower levels are actually called locally. Getting this right is
+# most of what makes the form feel native rather than translated: a Kenyan
+# officer types a County, not a "State".
+DEFAULT_LABELS = ("State / Province", "City / District")
+LOCATION_LABELS: dict[str, tuple[str, str]] = {
+    "NG": ("State", "Local Government Area"),
+    "KE": ("County", "Sub-county"),
+    "GH": ("Region", "District"),
+    "TZ": ("Region", "District"),
+    "UG": ("Region", "District"),
+    "RW": ("Province", "District"),
+    "ZA": ("Province", "Municipality"),
+    "ET": ("Region", "Zone"),
+    "IN": ("State", "District"),
+    "PH": ("Province", "City / Municipality"),
+    "ID": ("Province", "Regency / City"),
+    "US": ("State", "County / City"),
+    "CA": ("Province / Territory", "Municipality"),
+    "AU": ("State / Territory", "Local Government Area"),
+    "GB": ("Nation / Region", "Council area"),
+    "BR": ("State", "Municipality"),
+    "MX": ("State", "Municipality"),
+    "DE": ("Federal state", "District"),
+    "FR": ("Region", "Department"),
+    "ES": ("Autonomous community", "Province"),
+    "IT": ("Region", "Province"),
+    "NP": ("Province", "District"),
+    "BD": ("Division", "District"),
+    "PK": ("Province", "District"),
+    "LK": ("Province", "District"),
+}
+
+# Countries we ship verified dropdown data for. Everything else falls back to
+# free text — see the module docstring.
+SUBDIVISIONS: dict[str, dict[str, tuple[str, list[str]]]] = {
+    "NG": NIGERIA,
+}
+
+
+def country_labels(code: str) -> tuple[str, str]:
+    """(region_label, locality_label) for a country code."""
+    return LOCATION_LABELS.get((code or "").upper(), DEFAULT_LABELS)
+
+
+def country_name(code: str) -> str:
+    """Display name for a country code, falling back to the code itself.
+
+    Never raises on an unknown code: rows predating the country field, or
+    imported data, should still render something sensible.
+    """
+    return dict(COUNTRIES).get((code or "").upper(), code or "")
+
+
+def countries_payload() -> list[dict]:
+    """Every country, sorted by name, with its location vocabulary.
+
+    ``has_subdivisions`` tells the frontend whether to fetch a region list for
+    this country or fall straight to free-text inputs.
+    """
+    out = []
+    for code, name in COUNTRIES:
+        region_label, locality_label = country_labels(code)
+        out.append({
+            "code": code,
+            "name": name,
+            "region_label": region_label,
+            "locality_label": locality_label,
+            "has_subdivisions": code in SUBDIVISIONS,
+        })
+    return sorted(out, key=lambda c: c["name"])
+
+
+def subdivisions_payload(code: str) -> list[dict]:
+    """Regions (and their localities) for one country; [] when we have none."""
+    data = SUBDIVISIONS.get((code or "").upper())
+    if not data:
+        return []
+    return [
+        {"region": region, "capital": capital, "localities": localities}
+        for region, (capital, localities) in sorted(data.items())
     ]

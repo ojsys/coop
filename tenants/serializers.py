@@ -9,7 +9,7 @@ class CooperativeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cooperative
         fields = ["id", "name", "slug", "registration_no", "coop_type",
-                  "state", "lga", "base_currency", "tier", "status",
+                  "country", "state", "lga", "base_currency", "tier", "status",
                   "brand_color", "logo", "favicon", "member_cap", "bank_name",
                   "bank_account_name", "bank_account_no",
                   "contact_email", "contact_phone", "contact_address",
@@ -26,8 +26,9 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Cooperative
-        fields = ["id", "name", "registration_no", "coop_type", "state",
-                  "lga", "base_currency", "tier", "brand_color", "logo",
+        fields = ["id", "name", "registration_no", "coop_type", "country",
+                  "state", "lga", "base_currency", "tier", "brand_color",
+                  "logo",
                   "favicon", "member_cap",
                   "bank_name", "bank_account_name", "bank_account_no",
                   "contact_email", "contact_phone", "contact_address",

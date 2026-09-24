@@ -422,3 +422,261 @@ class PlatformTeamMember(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.user.full_name} · {self.get_role_display()}"
+
+
+# ── Public site content (the CMS) ───────────────────────────────────────────
+# Everything below exists so the marketing site can be edited by someone who
+# does not write code. The rule that shapes it: no copy that an admin might
+# reasonably want to change may live in the React bundle, because changing it
+# there means a developer, a build and a deploy.
+#
+# Structure is fixed (a hero, a principle band, features, steps, pricing,
+# footer); wording and imagery are data. Adding a *section* is still a code
+# change — that is a deliberate trade for an admin screen that reads like a
+# form rather than a page builder.
+
+# Material Symbols ligatures, offered as a dropdown. A free-text field here
+# would ask a non-technical editor to guess an icon name and show them a blank
+# space when they guessed wrong.
+ICON_CHOICES = [
+    ("group", "People"),
+    ("savings", "Savings"),
+    ("request_quote", "Loan / quote"),
+    ("how_to_vote", "Voting"),
+    ("summarize", "Reports"),
+    ("campaign", "Announcements"),
+    ("account_balance", "Bank"),
+    ("receipt_long", "Receipts"),
+    ("verified_user", "Security"),
+    ("lock", "Lock"),
+    ("insights", "Insights"),
+    ("handshake", "Partnership"),
+    ("payments", "Payments"),
+    ("schedule", "Time"),
+    ("support_agent", "Support"),
+    ("cloud_done", "Cloud"),
+    ("fact_check", "Audit"),
+    ("diversity_3", "Community"),
+]
+
+
+class SiteContent(TimeStampedModel):
+    """Singleton: the wording and imagery of the public landing page.
+
+    Field defaults hold the live copy rather than placeholders, and a data
+    migration creates the row from them. That matters for usability: an
+    editor opening this screen sees exactly what the site currently says and
+    edits it in place, instead of facing empty boxes with no idea what the
+    original wording was.
+    """
+
+    # ── Hero ────────────────────────────────────────────────────────────────
+    hero_eyebrow = models.CharField(
+        max_length=160,
+        default="Built for cooperatives and credit unions of 50–5,000 members",
+        help_text="The small pill of text above the headline.",
+    )
+    hero_title = models.CharField(
+        max_length=200,
+        default="A digital operating layer for cooperatives everywhere.",
+        help_text="The main headline. Keep it to one sentence.",
+    )
+    hero_subtitle = models.TextField(
+        default="Membership, contributions, loans, governance and audit-ready "
+                "reporting — in one place, on an append-only double-entry "
+                "ledger your auditor can actually follow.",
+        help_text="The paragraph under the headline.",
+    )
+    hero_primary_cta = models.CharField(max_length=40, default="Get started")
+    hero_secondary_cta = models.CharField(
+        max_length=40, default="Sign in to your society")
+    hero_image = models.ImageField(
+        upload_to="site_content/", null=True, blank=True,
+        help_text="A wide photograph beside the headline. Landscape, at least "
+                  "1200px wide. Leave empty to show a plain panel instead.",
+    )
+    hero_image_alt = models.CharField(
+        max_length=200, blank=True,
+        help_text="Describes the image for screen readers and when it fails "
+                  "to load. e.g. 'Members of a savings group meeting'.",
+    )
+
+    # ── Principle band ──────────────────────────────────────────────────────
+    principle_eyebrow = models.CharField(
+        max_length=80, default="Our core principle")
+    principle_title = models.CharField(
+        max_length=120, default="Ledger, not custodian.")
+    principle_body = models.TextField(
+        default="Money moves through licensed payment providers into your "
+                "society's own bank account. We record, reconcile and report "
+                "on it — we never hold member funds in a platform wallet. "
+                "That is a deliberate engineering and regulatory choice, and "
+                "it is why your money never depends on us staying solvent.",
+    )
+
+    # ── Section headings ────────────────────────────────────────────────────
+    features_title = models.CharField(
+        max_length=120, default="Everything a society runs on")
+    features_intro = models.TextField(
+        default="Replacing the member register, the contribution book and the "
+                "annual scramble to produce accounts.",
+    )
+    steps_title = models.CharField(max_length=120, default="How it works")
+    gallery_title = models.CharField(
+        max_length=120, default="Built for the people who run cooperatives",
+        help_text="Heading above the photo strip.",
+    )
+    gallery_intro = models.TextField(
+        blank=True,
+        default="Treasurers, secretaries and members — the people who keep a "
+                "society running, wherever it is.",
+    )
+
+    # ── Pricing ─────────────────────────────────────────────────────────────
+    pricing_title = models.CharField(
+        max_length=120, default="Pricing that follows your size")
+    pricing_intro = models.TextField(
+        default="A monthly subscription per society — not a cut of your "
+                "members' money.",
+    )
+    pricing_fallback = models.TextField(
+        default="Pricing depends on your society's size and how much history "
+                "needs migrating.",
+        help_text="Shown when no plans are published yet. The 'talk to us' "
+                  "link is added automatically.",
+    )
+
+    # ── Footer ──────────────────────────────────────────────────────────────
+    footer_tagline = models.CharField(max_length=120, default="by Startup Ripple")
+    footer_disclaimer = models.TextField(
+        default="CooperativeOS records and reports on cooperative finances. "
+                "It is not a bank, a lender, or a deposit-taking institution, "
+                "and it does not hold member funds.",
+        help_text="Legal footnote at the very bottom. Changing this may have "
+                  "regulatory consequences — check before editing.",
+    )
+
+    # ── Search engines / link previews ──────────────────────────────────────
+    meta_title = models.CharField(
+        max_length=70, blank=True,
+        help_text="Browser tab and search-result title. Under 60 characters "
+                  "is best. Leave empty to use the platform name.",
+    )
+    meta_description = models.CharField(
+        max_length=200, blank=True,
+        default="Membership, contributions, loans and audit-ready reporting "
+                "for cooperatives, on an append-only ledger.",
+        help_text="The grey text under the title in search results.",
+    )
+
+    class Meta:
+        verbose_name = "Site content"
+        verbose_name_plural = "Site content"
+
+    def __str__(self) -> str:
+        return "Public site content"
+
+    @classmethod
+    def load(cls) -> "SiteContent":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+
+class SiteSectionItem(TimeStampedModel):
+    """Shared behaviour for the ordered, hideable lists below.
+
+    ``visible`` rather than deletion is the default way to take something off
+    the site: an editor who removes a feature to try a shorter page can put it
+    back without retyping it.
+    """
+
+    order = models.PositiveIntegerField(
+        default=0, help_text="Lower numbers appear first.")
+    visible = models.BooleanField(
+        default=True, help_text="Untick to hide from the site without "
+                                "deleting it.")
+
+    class Meta:
+        abstract = True
+        ordering = ["order", "id"]
+
+
+class SiteFeature(SiteSectionItem):
+    """One card in the "Everything a society runs on" grid."""
+
+    icon = models.CharField(max_length=40, choices=ICON_CHOICES,
+                            default="group")
+    title = models.CharField(max_length=80)
+    body = models.TextField()
+
+    class Meta(SiteSectionItem.Meta):
+        abstract = False
+        ordering = ["order", "id"]
+        verbose_name = "Site feature card"
+
+    def __str__(self) -> str:
+        return self.title
+
+
+class SiteStep(SiteSectionItem):
+    """One numbered step in "How it works"."""
+
+    number = models.CharField(
+        max_length=4, help_text="Shown above the step, e.g. 01.")
+    title = models.CharField(max_length=80)
+    body = models.TextField()
+
+    class Meta(SiteSectionItem.Meta):
+        abstract = False
+        ordering = ["order", "id"]
+        verbose_name = "Site how-it-works step"
+
+    def __str__(self) -> str:
+        return f"{self.number} · {self.title}"
+
+
+class SiteTrustBadge(SiteSectionItem):
+    """One line in the trust strip above the footer."""
+
+    text = models.CharField(max_length=120)
+    icon = models.CharField(max_length=40, choices=ICON_CHOICES,
+                            default="verified_user")
+
+    class Meta(SiteSectionItem.Meta):
+        abstract = False
+        ordering = ["order", "id"]
+        verbose_name = "Site trust badge"
+
+    def __str__(self) -> str:
+        return self.text
+
+
+class SiteGalleryImage(SiteSectionItem):
+    """A photograph in the "people who run cooperatives" strip.
+
+    Deliberately a model rather than files in the repo: photography has to be
+    licensed by whoever publishes it, so the platform owner uploads images
+    they hold rights to instead of inheriting someone else's.
+    """
+
+    image = models.ImageField(
+        upload_to="site_content/",
+        help_text="Landscape, at least 800px wide. Photographs of real "
+                  "people work far better here than stock illustrations.",
+    )
+    alt_text = models.CharField(
+        max_length=200,
+        help_text="Describes the photo for screen readers. Required.",
+    )
+    caption = models.CharField(
+        max_length=120, blank=True,
+        help_text="Optional line shown under the photo.",
+    )
+
+    class Meta(SiteSectionItem.Meta):
+        abstract = False
+        ordering = ["order", "id"]
+        verbose_name = "Site gallery photo"
+
+    def __str__(self) -> str:
+        return self.caption or self.alt_text

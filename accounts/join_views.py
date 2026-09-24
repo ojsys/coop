@@ -34,6 +34,8 @@ class CooperativeApplicationSerializer(serializers.Serializer):
     applicant_email = serializers.EmailField()
     applicant_phone = serializers.CharField(max_length=20, required=False,
                                             allow_blank=True, default="")
+    country = serializers.CharField(max_length=2, required=False,
+                                    allow_blank=True, default="")
     state = serializers.CharField(max_length=80, required=False,
                                   allow_blank=True, default="")
     lga = serializers.CharField(max_length=80, required=False,
@@ -69,7 +71,7 @@ class CooperativeApplicationView(PublicView):
 class PublicSocietySerializer(serializers.ModelSerializer):
     class Meta:
         model = Cooperative
-        fields = ["id", "name", "slug", "state", "lga"]
+        fields = ["id", "name", "slug", "country", "state", "lga"]
 
 
 class PublicSocietySearchView(PublicView):

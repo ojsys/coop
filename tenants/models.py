@@ -31,8 +31,24 @@ class Cooperative(TimeStampedModel):
         max_length=100, blank=True,
         help_text="e.g. multipurpose, thrift & credit, farmers",
     )
-    state = models.CharField(max_length=80, blank=True)
-    lga = models.CharField(max_length=80, blank=True)
+    # Location is country -> state -> lga. The two lower fields keep their
+    # Nigerian names because renaming them would churn every console form and
+    # the by_state analytics rollup for no behavioural gain; what actually
+    # varies per country is the label, supplied by core.reference_data.
+    country = models.CharField(
+        max_length=2, blank=True,
+        help_text="ISO 3166-1 alpha-2 code (e.g. NG, KE, GB). Decides what "
+                  "the two fields below are called and whether they offer "
+                  "dropdowns.",
+    )
+    state = models.CharField(
+        max_length=80, blank=True,
+        help_text="State / province / county — see the country's labelling.",
+    )
+    lga = models.CharField(
+        max_length=80, blank=True,
+        help_text="LGA / district / city — see the country's labelling.",
+    )
     base_currency = models.CharField(
         max_length=3, default=settings.DEFAULT_CURRENCY,
     )

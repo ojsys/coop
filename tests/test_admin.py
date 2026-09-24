@@ -41,8 +41,9 @@ from payments.models import PaymentEvent, Provider, ProviderAccount
 from platform_admin.models import (Domain, Incident, Invoice,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
-                                   ProviderCheck, ProviderStatus, Subscription,
-                                   SupportTicket)
+                                   ProviderCheck, ProviderStatus, SiteContent,
+                                   SiteFeature, SiteGalleryImage, SiteStep,
+                                   SiteTrustBadge, Subscription, SupportTicket)
 from savings.models import SavingsGoal, SavingsProduct
 from tenants.models import Cooperative
 
@@ -192,6 +193,23 @@ def dataset(coop, member, dues_type, member_funds):
     SupportTicket.objects.create(cooperative=coop, subject="Cannot log in")
     PlatformProfile.load()
     NotificationTemplate.objects.create(key="welcome", name="Welcome email")
+
+    # Public-site CMS. Migration 0007 seeds this copy in a real database, but
+    # the fixture makes its own rows so it stays true to the docstring above
+    # and keeps working if the suite is ever run with migrations disabled.
+    # The gallery ships empty on purpose — no photograph is bundled with the
+    # repo — so its only row is this one, and the file need not exist: a file
+    # field takes a plain path, exactly as MemberDocument does above.
+    SiteContent.load()
+    SiteFeature.objects.create(
+        title="Members & registers", body="Replace the paper register.")
+    SiteStep.objects.create(
+        number="01", title="Onboard your society", body="We migrate your data.")
+    SiteTrustBadge.objects.create(text="Append-only ledger with audit trail")
+    SiteGalleryImage.objects.create(
+        image="site_content/sample.png",
+        alt_text="Members of a savings group at a monthly meeting",
+    )
     PlatformTeamMember.objects.create(
         user=User.objects.create_user(email="lead@startupripple.co",
                                       full_name="Onboarding Lead"),
