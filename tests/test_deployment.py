@@ -68,6 +68,76 @@ def test_spa_shell_is_not_cached(client):
     assert "no-cache" in response["Cache-Control"]
 
 
+# ── Email delivery is configured ────────────────────────────────────────────
+# Mail failing is invisible from outside — the reset endpoint answers the same
+# way either way — so the check that surfaces it is worth pinning.
+SMTP = "django.core.mail.backends.smtp.EmailBackend"
+CONSOLE = "django.core.mail.backends.console.EmailBackend"
+
+
+def test_console_backend_is_never_flagged(settings, monkeypatch):
+    """Sending nothing is the point in development."""
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = CONSOLE
+    monkeypatch.delenv("DEFAULT_FROM_EMAIL", raising=False)
+    assert email_delivery_configured(None) == []
+
+
+def test_smtp_without_a_host_is_flagged(settings, monkeypatch):
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = ""
+    settings.EMAIL_HOST_USER = "user"
+    settings.EMAIL_HOST_PASSWORD = "secret"
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "ops@example.com")
+
+    ids = [w.id for w in email_delivery_configured(None)]
+    assert "core.W002" in ids
+
+
+def test_smtp_without_credentials_is_flagged(settings, monkeypatch):
+    """Brevo needs a login; an empty password fails at AUTH, not at connect."""
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = "smtp-relay.brevo.com"
+    settings.EMAIL_HOST_USER = ""
+    settings.EMAIL_HOST_PASSWORD = ""
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "ops@example.com")
+
+    warnings = email_delivery_configured(None)
+    assert [w.id for w in warnings] == ["core.W002"]
+    assert "EMAIL_HOST_USER" in warnings[0].msg
+
+
+def test_unset_from_address_is_flagged(settings, monkeypatch):
+    """The commonest cause of silent non-delivery: an unverified sender."""
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = "smtp-relay.brevo.com"
+    settings.EMAIL_HOST_USER = "user"
+    settings.EMAIL_HOST_PASSWORD = "secret"
+    monkeypatch.delenv("DEFAULT_FROM_EMAIL", raising=False)
+
+    ids = [w.id for w in email_delivery_configured(None)]
+    assert "core.W003" in ids
+
+
+def test_a_fully_configured_relay_is_silent(settings, monkeypatch):
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = "smtp-relay.brevo.com"
+    settings.EMAIL_HOST_USER = "user"
+    settings.EMAIL_HOST_PASSWORD = "secret"
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "ops@example.com")
+
+    assert email_delivery_configured(None) == []
+
+
 # ── Cache headers on the SPA build ──────────────────────────────────────────
 # Unit-tested directly rather than through a request: WhiteNoise's middleware
 # is only installed under the prod settings, but the hook is a plain function
