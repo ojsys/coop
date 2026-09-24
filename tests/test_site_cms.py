@@ -191,6 +191,36 @@ def test_gallery_exposes_uploaded_photographs(media, blank_cms):
     assert gallery[0]["caption"] == "Monthly contribution day"
 
 
+def test_hiding_every_photo_does_not_bring_the_defaults_back(media, blank_cms):
+    """"Nothing uploaded" and "deliberately emptied" must stay distinguishable.
+
+    The gallery list carries visible rows only, so without a separate signal
+    the page would treat an admin who hid every photo exactly like one who had
+    never uploaded any — and hand them the bundled defaults with no way to
+    clear the strip.
+    """
+    body = APIClient().get(URL).json()
+    assert body["gallery_has_custom"] is False, "no rows exist yet"
+
+    SiteGalleryImage.objects.create(
+        order=0, image=image(), alt_text="Members at a meeting", visible=False)
+
+    body = APIClient().get(URL).json()
+    assert body["gallery"] == [], "a hidden photo is not published"
+    assert body["gallery_has_custom"] is True, (
+        "a hidden row still counts as custom, so the strip stays empty"
+    )
+
+
+def test_a_visible_photo_is_published_and_flagged(media, blank_cms):
+    SiteGalleryImage.objects.create(
+        order=0, image=image(), alt_text="Members at a meeting")
+
+    body = APIClient().get(URL).json()
+    assert len(body["gallery"]) == 1
+    assert body["gallery_has_custom"] is True
+
+
 def test_hero_image_is_null_until_one_is_uploaded():
     assert APIClient().get(URL).json()["hero"]["image"] is None
 

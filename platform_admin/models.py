@@ -493,7 +493,8 @@ class SiteContent(TimeStampedModel):
     hero_image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
         help_text="A wide photograph beside the headline. Landscape, at least "
-                  "1200px wide. Leave empty to show a plain panel instead.",
+                  "1200px wide. Leave empty to use the built-in default "
+                  "photograph.",
     )
     hero_image_alt = models.CharField(
         max_length=200, blank=True,
@@ -633,8 +634,9 @@ class SiteContent(TimeStampedModel):
                                   default="Apply as a cooperative")
     cta_image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
-        help_text="Optional photograph behind the closing banner. A wide, "
-                  "fairly dark image works best — text sits on top of it.",
+        help_text="Photograph behind the closing banner. A wide, fairly dark "
+                  "image works best — text sits on top of it. Leave empty to "
+                  "use the built-in default.",
     )
     cta_image_alt = models.CharField(max_length=200, blank=True)
 
@@ -727,9 +729,12 @@ class SiteTrustBadge(SiteSectionItem):
 class SiteGalleryImage(SiteSectionItem):
     """A photograph in the "people who run cooperatives" strip.
 
-    Deliberately a model rather than files in the repo: photography has to be
-    licensed by whoever publishes it, so the platform owner uploads images
-    they hold rights to instead of inheriting someone else's.
+    The strip ships with default photographs bundled in the frontend. Adding
+    any row here replaces the whole default set, so the strip is either
+    entirely yours or entirely ours — never a mix, which would look accidental.
+
+    See frontend/src/assets/site/CREDITS.md for what the defaults are and the
+    licensing caveat that applies to photographs of identifiable people.
     """
 
     image = models.ImageField(
@@ -772,8 +777,8 @@ class SiteShowcase(SiteSectionItem):
     )
     image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
-        help_text="Landscape, at least 1000px wide. Until one is uploaded "
-                  "the block shows a plain panel in its place.",
+        help_text="Landscape, at least 1000px wide. Leave empty and the block "
+                  "falls back to one of the built-in default photographs.",
     )
     image_alt = models.CharField(
         max_length=200, blank=True,

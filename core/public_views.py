@@ -184,6 +184,11 @@ class PublicSiteContentView(PublicView):
                 for g in SiteGalleryImage.objects.filter(visible=True)
                 if g.image
             ],
+            # The list above carries visible rows only. Without this the
+            # frontend cannot tell "no photos uploaded" (show the bundled
+            # defaults) from "every photo hidden" (show nothing) — and an
+            # admin who hid them all would get the defaults back instead.
+            "gallery_has_custom": SiteGalleryImage.objects.exists(),
             "trust_badges": [
                 {"icon": b.icon, "text": b.text}
                 for b in SiteTrustBadge.objects.filter(visible=True)
