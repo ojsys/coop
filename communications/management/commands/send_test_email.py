@@ -93,6 +93,8 @@ class Command(BaseCommand):
                 "EMAIL_HOST in backend/.env (smtp-relay.brevo.com for Brevo)."
             )
 
+        self._warn_on_domain_mismatch(sender)
+
         message = EmailMultiAlternatives(
             subject="CooperativeOS test email",
             body=(
@@ -127,6 +129,33 @@ class Command(BaseCommand):
             "check spam, then the relay's own activity log. Mail from a domain "
             "without SPF and DKIM records is frequently filtered silently."
         )
+
+    def _warn_on_domain_mismatch(self, sender: str) -> None:
+        """Flag the failure that survives a successful send.
+
+        A relay accepts the message first and decides whether you may send as
+        that address afterwards, so a foreign From domain produces exactly the
+        reading below: "accepted", then nothing ever arrives.
+        """
+        from email.utils import parseaddr
+        from urllib.parse import urlparse
+
+        from_domain = parseaddr(sender)[1].rsplit("@", 1)[-1]
+        site_host = (urlparse(settings.SITE_URL).hostname or "").removeprefix("www.")
+        if not (from_domain and site_host):
+            return
+        if (from_domain == site_host
+                or from_domain.endswith("." + site_host)
+                or site_host.endswith("." + from_domain)):
+            return
+
+        self.stdout.write(self.style.WARNING(
+            f"Note: sending as {from_domain} while the site is {site_host}.\n"
+            f"If {from_domain} is not verified with your relay, the message "
+            f"below will be accepted and then dropped — check the relay's "
+            f"activity log rather than trusting the success line."
+        ))
+        self.stdout.write("")
 
     def _explain(self, exc: Exception) -> None:
         detail = f"{type(exc).__name__}: {exc}"

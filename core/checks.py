@@ -60,6 +60,39 @@ def email_delivery_configured(app_configs, **kwargs):
             )
         )
 
+    # A relay will accept mail at SMTP time and *then* drop it if the From
+    # domain is not one you have verified. The clearest signal that it is not
+    # yours is that it differs from the site's own domain — which is how mail
+    # can be "accepted by the server" and still never arrive.
+    from email.utils import parseaddr
+    from urllib.parse import urlparse
+
+    from_domain = parseaddr(settings.DEFAULT_FROM_EMAIL)[1].rsplit("@", 1)[-1]
+    site_host = (urlparse(settings.SITE_URL).hostname or "").removeprefix("www.")
+    if from_domain and site_host and not (
+        from_domain == site_host
+        or from_domain.endswith("." + site_host)
+        or site_host.endswith("." + from_domain)
+    ):
+        problems.append(
+            Warning(
+                f"Mail is sent from {from_domain!r} but the site is "
+                f"{site_host!r}.",
+                hint=(
+                    "Relays accept a message and only then check whether you "
+                    "are allowed to send as that address, so this failure is "
+                    "silent: the send reports success and the mail is dropped "
+                    "or marked blocked in the relay's activity log. Gmail also "
+                    "rejects mail whose From domain has no SPF or DKIM record "
+                    "authorising the relay. Set DEFAULT_FROM_EMAIL to an "
+                    "address on the site's own domain and verify that domain "
+                    "with your relay. If the mismatch is deliberate, verify "
+                    "the sending domain instead and ignore this."
+                ),
+                id="core.W004",
+            )
+        )
+
     # Keyed on whether it was configured at all, not on the address itself:
     # the bundled default may legitimately be the deployment's own domain.
     if os.environ.get("DEFAULT_FROM_EMAIL") is None:

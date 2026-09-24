@@ -105,6 +105,9 @@ def test_smtp_without_credentials_is_flagged(settings, monkeypatch):
     settings.EMAIL_HOST = "smtp-relay.brevo.com"
     settings.EMAIL_HOST_USER = ""
     settings.EMAIL_HOST_PASSWORD = ""
+    # Pinned so the sending domain matches and only W002 is under test.
+    settings.SITE_URL = "https://example.com"
+    settings.DEFAULT_FROM_EMAIL = "ops@example.com"
     monkeypatch.setenv("DEFAULT_FROM_EMAIL", "ops@example.com")
 
     warnings = email_delivery_configured(None)
@@ -126,14 +129,56 @@ def test_unset_from_address_is_flagged(settings, monkeypatch):
     assert "core.W003" in ids
 
 
-def test_a_fully_configured_relay_is_silent(settings, monkeypatch):
+def test_a_foreign_sending_domain_is_flagged(settings, monkeypatch):
+    """Accepted by the relay, then silently dropped — the hardest one to see."""
     from core.checks import email_delivery_configured
 
     settings.EMAIL_BACKEND = SMTP
     settings.EMAIL_HOST = "smtp-relay.brevo.com"
     settings.EMAIL_HOST_USER = "user"
     settings.EMAIL_HOST_PASSWORD = "secret"
-    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "ops@example.com")
+    settings.SITE_URL = "https://mycooperativeos.com"
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "no-reply@cooperativeos.africa")
+    settings.DEFAULT_FROM_EMAIL = "CooperativeOS <no-reply@cooperativeos.africa>"
+
+    warnings = email_delivery_configured(None)
+    assert [w.id for w in warnings] == ["core.W004"]
+    assert "cooperativeos.africa" in warnings[0].msg
+
+
+@pytest.mark.parametrize(
+    "from_email",
+    [
+        "no-reply@mycooperativeos.com",          # exact match
+        "no-reply@mail.mycooperativeos.com",     # sending subdomain
+        "CooperativeOS <ops@mycooperativeos.com>",  # display name included
+    ],
+)
+def test_a_matching_sending_domain_is_accepted(settings, monkeypatch, from_email):
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = "smtp-relay.brevo.com"
+    settings.EMAIL_HOST_USER = "user"
+    settings.EMAIL_HOST_PASSWORD = "secret"
+    settings.SITE_URL = "https://www.mycooperativeos.com"
+    settings.DEFAULT_FROM_EMAIL = from_email
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", from_email)
+
+    assert email_delivery_configured(None) == []
+
+
+def test_a_fully_configured_relay_is_silent(settings, monkeypatch):
+    """Everything set and the sending domain matching: nothing to report."""
+    from core.checks import email_delivery_configured
+
+    settings.EMAIL_BACKEND = SMTP
+    settings.EMAIL_HOST = "smtp-relay.brevo.com"
+    settings.EMAIL_HOST_USER = "user"
+    settings.EMAIL_HOST_PASSWORD = "secret"
+    settings.SITE_URL = "https://example.com"
+    settings.DEFAULT_FROM_EMAIL = "CooperativeOS <ops@example.com>"
+    monkeypatch.setenv("DEFAULT_FROM_EMAIL", "CooperativeOS <ops@example.com>")
 
     assert email_delivery_configured(None) == []
 
