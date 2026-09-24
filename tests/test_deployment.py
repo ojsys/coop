@@ -68,6 +68,47 @@ def test_spa_shell_is_not_cached(client):
     assert "no-cache" in response["Cache-Control"]
 
 
+# ── Cache headers on the SPA build ──────────────────────────────────────────
+# Unit-tested directly rather than through a request: WhiteNoise's middleware
+# is only installed under the prod settings, but the hook is a plain function
+# and the contract worth pinning is what it puts in Cache-Control.
+@pytest.mark.parametrize(
+    "url", ["/sw.js", "/registerSW.js", "/manifest.webmanifest", "/index.html"],
+)
+def test_files_that_choose_the_build_are_never_cached(url):
+    """A cached service worker keeps serving the previous bundle.
+
+    That is the failure where a deploy appears to do nothing: the shell is
+    no-cache and the assets are hashed, but the worker handing them out is
+    itself stale, so the browser never learns there is a new build.
+    """
+    from core.static_headers import add_spa_cache_headers
+
+    headers: dict[str, str] = {}
+    add_spa_cache_headers(headers, f"/srv/dist{url}", url)
+    assert "no-cache" in headers["Cache-Control"]
+    assert "max-age=3600" not in headers["Cache-Control"]
+
+
+def test_hashed_bundles_are_cached_forever():
+    """Their names change with their contents, so staleness is impossible."""
+    from core.static_headers import add_spa_cache_headers
+
+    headers: dict[str, str] = {}
+    url = "/assets/index-DXh8oOmz.js"
+    add_spa_cache_headers(headers, f"/srv/dist{url}", url)
+    assert "immutable" in headers["Cache-Control"]
+
+
+def test_unrecognised_files_keep_whitenoise_s_own_decision():
+    """The hook narrows two cases; it must not take over the rest."""
+    from core.static_headers import add_spa_cache_headers
+
+    headers = {"Cache-Control": "max-age=3600, public"}
+    add_spa_cache_headers(headers, "/srv/dist/favicon.svg", "/favicon.svg")
+    assert headers["Cache-Control"] == "max-age=3600, public"
+
+
 @pytest.mark.parametrize("path", ["/api/v1/", "/api/v1/members/", "/admin/"])
 def test_catch_all_does_not_shadow_server_routes(client, path):
     """Anything server-side must never be answered with the SPA shell."""

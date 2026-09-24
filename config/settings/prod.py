@@ -100,8 +100,18 @@ MIDDLEWARE.insert(
 # Serve the Vite build's root-level files (/assets/*, /sw.js, /favicon.svg,
 # /manifest.webmanifest) at the URL root, exactly as index.html references them.
 WHITENOISE_ROOT = FRONTEND_DIST
-# The service worker must never be served stale, or clients pin to an old build.
 WHITENOISE_MAX_AGE = int(os.environ.get('WHITENOISE_MAX_AGE', '3600'))
+
+# The line above is not enough on its own, and used to claim otherwise.
+# WhiteNoise only treats a file as immutable when it sits under STATIC_URL, and
+# the SPA build is served from the URL root — so every file in it, including
+# sw.js, was getting max-age=3600. A cached service worker keeps serving its
+# precached shell (pointing at the previous bundle), which is why a redeploy
+# could appear to change nothing. This hook runs last and settles both ends:
+# never cache the files that choose the build, cache the hashed ones forever.
+from core.static_headers import add_spa_cache_headers  # noqa: E402
+
+WHITENOISE_ADD_HEADERS_FUNCTION = add_spa_cache_headers
 
 STORAGES = {
     'default': {
