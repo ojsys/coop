@@ -22,7 +22,7 @@ from core.reference_data import (
 )
 from platform_admin.models import (
     Plan, PlatformProfile, SiteContent, SiteFeature, SiteGalleryImage,
-    SiteStep, SiteTrustBadge,
+    SiteShowcase, SiteStep, SiteTrustBadge,
 )
 
 
@@ -142,11 +142,40 @@ class PublicSiteContentView(PublicView):
                 {"icon": f.icon, "title": f.title, "body": f.body}
                 for f in SiteFeature.objects.filter(visible=True)
             ],
+            "showcase_title": content.showcase_title,
+            "showcase_intro": content.showcase_intro,
+            "showcase": [
+                {"title": s.title, "body": s.body,
+                 "bullets": s.bullet_list(),
+                 "image": url(s.image), "image_alt": s.image_alt}
+                for s in SiteShowcase.objects.filter(visible=True)
+            ],
             "steps_title": content.steps_title,
+            "steps_intro": content.steps_intro,
             "steps": [
-                {"number": s.number, "title": s.title, "body": s.body}
+                {"number": s.number, "icon": s.icon, "title": s.title,
+                 "body": s.body}
                 for s in SiteStep.objects.filter(visible=True)
             ],
+            "apps": {
+                "title": content.apps_title,
+                "body": content.apps_body,
+                "note": content.apps_note,
+                # A published store listing wins over a side-loaded APK, so
+                # uploading one does not strand members on the raw file.
+                "android_url": (content.android_store_url
+                                or url(content.android_apk)),
+                "ios_url": content.ios_store_url or None,
+                "screenshot": url(content.app_screenshot),
+                "screenshot_alt": content.app_screenshot_alt,
+            },
+            "cta": {
+                "title": content.cta_title,
+                "body": content.cta_body,
+                "button": content.cta_button,
+                "image": url(content.cta_image),
+                "image_alt": content.cta_image_alt,
+            },
             "gallery_title": content.gallery_title,
             "gallery_intro": content.gallery_intro,
             "gallery": [

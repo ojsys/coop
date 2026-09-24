@@ -42,8 +42,9 @@ from platform_admin.models import (Domain, Incident, Invoice,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
-                                   SiteFeature, SiteGalleryImage, SiteStep,
-                                   SiteTrustBadge, Subscription, SupportTicket)
+                                   SiteFeature, SiteGalleryImage, SiteShowcase,
+                                   SiteStep, SiteTrustBadge, Subscription,
+                                   SupportTicket)
 from savings.models import SavingsGoal, SavingsProduct
 from tenants.models import Cooperative
 
@@ -209,6 +210,14 @@ def dataset(coop, member, dues_type, member_funds):
     SiteGalleryImage.objects.create(
         image="site_content/sample.png",
         alt_text="Members of a savings group at a monthly meeting",
+    )
+    SiteShowcase.objects.create(
+        title="Contributions that reconcile themselves",
+        body="Payments land in your own account and match themselves to the "
+             "member who owed them.",
+        bullets="Matched automatically\nArrears flagged the day they happen",
+        image="site_content/showcase.png",
+        image_alt="A treasurer reviewing contributions on a laptop",
     )
     PlatformTeamMember.objects.create(
         user=User.objects.create_user(email="lead@startupripple.co",

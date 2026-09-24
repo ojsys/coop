@@ -14,7 +14,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from platform_admin.models import (
-    SiteContent, SiteFeature, SiteGalleryImage, SiteStep, SiteTrustBadge,
+    SiteContent, SiteFeature, SiteGalleryImage, SiteShowcase, SiteStep,
+    SiteTrustBadge,
 )
 
 pytestmark = pytest.mark.django_db
@@ -53,6 +54,7 @@ def blank_cms():
     SiteStep.objects.all().delete()
     SiteTrustBadge.objects.all().delete()
     SiteGalleryImage.objects.all().delete()
+    SiteShowcase.objects.all().delete()
 
 
 # ── Reachability ────────────────────────────────────────────────────────────
@@ -187,3 +189,103 @@ def test_hero_image_is_served_once_uploaded(media):
     hero = APIClient().get(URL).json()["hero"]
     assert hero["image"]
     assert hero["image_alt"] == "A savings group counting contributions"
+
+
+# ── Feature deep-dives ──────────────────────────────────────────────────────
+def test_deep_dives_are_seeded_with_copy_and_bullets():
+    """The section ships explained, not as an empty band."""
+    body = APIClient().get(URL).json()
+    assert len(body["showcase"]) >= 3
+    assert all(s["body"] for s in body["showcase"])
+    assert any(s["bullets"] for s in body["showcase"])
+
+
+def test_bullets_are_split_into_a_list(blank_cms):
+    """Admins type one per line; the page needs them as separate items."""
+    SiteShowcase.objects.create(
+        order=0, title="Loans", body="…",
+        bullets="  Approved by a second officer  \n\nSchedules generated\n",
+    )
+    block = APIClient().get(URL).json()["showcase"][0]
+    assert block["bullets"] == [
+        "Approved by a second officer", "Schedules generated",
+    ], "blank lines dropped and surrounding whitespace trimmed"
+
+
+def test_deep_dive_without_an_image_still_publishes(blank_cms):
+    """No photograph yet must not remove the explanation from the page."""
+    SiteShowcase.objects.create(order=0, title="Ledger", body="Traceable.")
+    block = APIClient().get(URL).json()["showcase"][0]
+    assert block["image"] is None
+    assert block["title"] == "Ledger"
+
+
+def test_hidden_deep_dives_are_withheld(blank_cms):
+    SiteShowcase.objects.create(order=0, title="Shown", body="a")
+    SiteShowcase.objects.create(order=1, title="Hidden", body="b",
+                                visible=False)
+    titles = [s["title"] for s in APIClient().get(URL).json()["showcase"]]
+    assert titles == ["Shown"]
+
+
+# ── How it works ────────────────────────────────────────────────────────────
+def test_each_step_carries_its_own_icon():
+    """The diagram draws one icon per step — three identical ones look broken."""
+    icons = [s["icon"] for s in APIClient().get(URL).json()["steps"]]
+    assert all(icons), "every step needs an icon"
+    assert len(set(icons)) == len(icons), "seeded steps must differ"
+
+
+# ── Mobile apps ─────────────────────────────────────────────────────────────
+def test_app_links_are_null_until_they_are_set(blank_cms):
+    """Null hides a button, so an unreleased iOS app advertises nothing."""
+    apps = APIClient().get(URL).json()["apps"]
+    assert apps["android_url"] is None
+    assert apps["ios_url"] is None
+
+
+def test_an_uploaded_apk_is_offered_when_there_is_no_store_listing():
+    content = SiteContent.load()
+    content.android_apk = "site_apps/cooperativeos.apk"
+    content.save()
+
+    apps = APIClient().get(URL).json()["apps"]
+    assert apps["android_url"], "the uploaded APK should be downloadable"
+    assert apps["android_url"].endswith(".apk")
+
+
+def test_a_store_listing_wins_over_an_uploaded_apk():
+    """Publishing to the Play Store must not strand members on a raw file."""
+    content = SiteContent.load()
+    content.android_apk = "site_apps/cooperativeos.apk"
+    content.android_store_url = "https://play.google.com/store/apps/details?id=x"
+    content.save()
+
+    assert APIClient().get(URL).json()["apps"]["android_url"] == (
+        "https://play.google.com/store/apps/details?id=x")
+
+
+def test_ios_link_is_served_when_set():
+    content = SiteContent.load()
+    content.ios_store_url = "https://apps.apple.com/app/id123"
+    content.save()
+    assert APIClient().get(URL).json()["apps"]["ios_url"] == (
+        "https://apps.apple.com/app/id123")
+
+
+# ── Closing call to action ──────────────────────────────────────────────────
+def test_call_to_action_is_served_with_defaults():
+    cta = APIClient().get(URL).json()["cta"]
+    assert cta["title"] and cta["body"] and cta["button"]
+    assert cta["image"] is None, "no banner image is bundled"
+
+
+def test_call_to_action_is_editable():
+    content = SiteContent.load()
+    content.cta_title = "Join 40 societies already on board"
+    content.cta_button = "Start your application"
+    content.save()
+
+    cta = APIClient().get(URL).json()["cta"]
+    assert cta["title"] == "Join 40 societies already on board"
+    assert cta["button"] == "Start your application"

@@ -8,14 +8,16 @@ the platform and aggregate across every cooperative — so they use plain
 from __future__ import annotations
 
 from django.contrib import admin, messages
+from django.db import models
 from django.utils.html import format_html
 
 from platform_admin.models import (Domain, Incident, Invoice,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
-                                   SiteFeature, SiteGalleryImage, SiteStep,
-                                   SiteTrustBadge, Subscription, SupportTicket)
+                                   SiteFeature, SiteGalleryImage, SiteShowcase,
+                                   SiteStep, SiteTrustBadge, Subscription,
+                                   SupportTicket)
 
 
 # ── Billing ────────────────────────────────────────────────────────────────
@@ -216,10 +218,25 @@ class NotificationTemplateAdmin(admin.ModelAdmin):
 # These screens are used by non-technical staff, so they are organised by
 # where things appear on the page rather than by model structure, and every
 # field carries help text written for someone who has never seen the code.
+def _preview(image_field, empty_message: str, height: int = 160):
+    """Render an uploaded image, or say plainly that there isn't one."""
+    if not image_field:
+        return empty_message
+    return format_html(
+        '<img src="{}" alt="" style="max-height:{}px;max-width:100%;'
+        'border-radius:8px">', image_field.url, height,
+    )
 @admin.register(SiteContent)
 class SiteContentAdmin(admin.ModelAdmin):
     list_display = ("__str__", "hero_title", "updated_at")
-    readonly_fields = ("hero_image_preview", "created_at", "updated_at")
+    readonly_fields = ("hero_image_preview", "app_screenshot_preview",
+                       "cta_image_preview", "created_at", "updated_at")
+
+    # A store link pasted without a scheme becomes https, not http. Declared
+    # on the field rather than via FORMS_URLFIELD_ASSUME_HTTPS: that setting
+    # silences Django 5's warning only by raising its own deprecation warning,
+    # whereas this argument is what replaces it and survives into Django 6.
+    formfield_overrides = {models.URLField: {"assume_scheme": "https"}}
 
     fieldsets = (
         ("Top of the page (hero)", {
@@ -233,10 +250,24 @@ class SiteContentAdmin(admin.ModelAdmin):
                        "principle_body"),
         }),
         ("Section headings", {
-            "description": "Headings only — the cards, steps and photos "
-                           "themselves are edited on their own screens.",
-            "fields": ("features_title", "features_intro", "steps_title",
+            "description": "Headings only — the cards, steps, deep-dives and "
+                           "photos themselves are edited on their own screens.",
+            "fields": ("features_title", "features_intro",
+                       "showcase_title", "showcase_intro",
+                       "steps_title", "steps_intro",
                        "gallery_title", "gallery_intro"),
+        }),
+        ("Mobile apps", {
+            "description": "Buttons appear only for the links you fill in, so "
+                           "an unreleased iOS app simply shows nothing.",
+            "fields": ("apps_title", "apps_body",
+                       "android_store_url", "android_apk", "ios_store_url",
+                       "apps_note", "app_screenshot", "app_screenshot_preview",
+                       "app_screenshot_alt"),
+        }),
+        ("Closing call to action", {
+            "fields": ("cta_title", "cta_body", "cta_button",
+                       "cta_image", "cta_image_preview", "cta_image_alt"),
         }),
         ("Pricing", {
             "description": "Prices come from the Plans table and are never "
@@ -257,12 +288,17 @@ class SiteContentAdmin(admin.ModelAdmin):
 
     @admin.display(description="Current hero image")
     def hero_image_preview(self, obj):
-        if not obj.hero_image:
-            return "No image — the page shows a plain panel instead."
-        return format_html(
-            '<img src="{}" alt="" style="max-height:160px;max-width:100%;'
-            'border-radius:8px">', obj.hero_image.url,
-        )
+        return _preview(obj.hero_image,
+                        "No image — the page shows a plain panel instead.")
+
+    @admin.display(description="Current screenshot")
+    def app_screenshot_preview(self, obj):
+        return _preview(obj.app_screenshot, "No screenshot uploaded.")
+
+    @admin.display(description="Current banner image")
+    def cta_image_preview(self, obj):
+        return _preview(obj.cta_image,
+                        "No image — the banner uses a plain green panel.")
 
     def has_add_permission(self, request):
         # Singleton — one public site, loaded via SiteContent.load().
@@ -282,9 +318,42 @@ class SiteFeatureAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
+@admin.register(SiteShowcase)
+class SiteShowcaseAdmin(admin.ModelAdmin):
+    list_display = ("title", "has_image", "order", "visible")
+    list_editable = ("order", "visible")
+    list_filter = ("visible",)
+    search_fields = ("title", "body", "bullets")
+    ordering = ("order", "id")
+    readonly_fields = ("preview", "created_at", "updated_at")
+
+    fieldsets = (
+        (None, {
+            "description": "A photograph and a few sentences, alternating "
+                           "sides down the page. Upload images you hold the "
+                           "rights to — see the gallery screen for sources.",
+            "fields": ("title", "body", "bullets", "image", "preview",
+                       "image_alt", "order", "visible"),
+        }),
+        ("Timestamps", {
+            "classes": ("collapse",),
+            "fields": ("created_at", "updated_at"),
+        }),
+    )
+
+    @admin.display(description="Image", boolean=True)
+    def has_image(self, obj):
+        return bool(obj.image)
+
+    @admin.display(description="Preview")
+    def preview(self, obj):
+        return _preview(obj.image, "No image yet — a plain panel is shown.",
+                        height=220)
+
+
 @admin.register(SiteStep)
 class SiteStepAdmin(admin.ModelAdmin):
-    list_display = ("number", "title", "order", "visible")
+    list_display = ("number", "title", "icon", "order", "visible")
     list_editable = ("order", "visible")
     list_filter = ("visible",)
     search_fields = ("title", "body")

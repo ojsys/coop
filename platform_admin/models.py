@@ -569,6 +569,71 @@ class SiteContent(TimeStampedModel):
         help_text="The grey text under the title in search results.",
     )
 
+    # ── Feature deep-dives ──────────────────────────────────────────────────
+    showcase_title = models.CharField(
+        max_length=120, default="A closer look at the day-to-day")
+    showcase_intro = models.TextField(
+        blank=True,
+        default="The parts of running a society that take the most time, and "
+                "what replaces them.",
+    )
+
+    # ── How it works ────────────────────────────────────────────────────────
+    steps_intro = models.TextField(
+        blank=True,
+        default="From your first conversation with us to members checking "
+                "their own statements — usually six to ten weeks.",
+    )
+
+    # ── Mobile apps ─────────────────────────────────────────────────────────
+    apps_title = models.CharField(
+        max_length=120, default="Put it in your members' hands")
+    apps_body = models.TextField(
+        default="Members check their contributions, savings and loan balance, "
+                "read statements and get notices — without calling the "
+                "secretary. Officers can approve from the same app.",
+    )
+    apps_note = models.CharField(
+        max_length=160, blank=True,
+        help_text="Small line under the buttons, e.g. 'iOS version coming "
+                  "soon'. Leave empty to hide it.",
+    )
+    android_store_url = models.URLField(
+        blank=True,
+        help_text="Google Play link. Leave empty if not published there yet.",
+    )
+    android_apk = models.FileField(
+        upload_to="site_apps/", null=True, blank=True,
+        help_text="Or upload the APK directly for side-loading. If a Play "
+                  "Store link is set above, that is used instead. Large "
+                  "uploads can hit the host's file-size limit — upload over "
+                  "SFTP and link to it if the admin times out.",
+    )
+    ios_store_url = models.URLField(
+        blank=True, help_text="App Store link. Leave empty to hide the "
+                              "iOS button.")
+    app_screenshot = models.ImageField(
+        upload_to="site_content/", null=True, blank=True,
+        help_text="A phone screenshot beside the download buttons. Portrait.",
+    )
+    app_screenshot_alt = models.CharField(max_length=200, blank=True)
+
+    # ── Closing call to action ──────────────────────────────────────────────
+    cta_title = models.CharField(
+        max_length=160, default="Ready to bring your society on board?")
+    cta_body = models.TextField(
+        default="Tell us about your society and we will talk through what "
+                "needs migrating. Nothing is charged until you decide to go "
+                "ahead.",
+    )
+    cta_button = models.CharField(max_length=40, default="Apply as a society")
+    cta_image = models.ImageField(
+        upload_to="site_content/", null=True, blank=True,
+        help_text="Optional photograph behind the closing banner. A wide, "
+                  "fairly dark image works best — text sits on top of it.",
+    )
+    cta_image_alt = models.CharField(max_length=200, blank=True)
+
     class Meta:
         verbose_name = "Site content"
         verbose_name_plural = "Site content"
@@ -623,6 +688,10 @@ class SiteStep(SiteSectionItem):
 
     number = models.CharField(
         max_length=4, help_text="Shown above the step, e.g. 01.")
+    icon = models.CharField(
+        max_length=40, choices=ICON_CHOICES, default="handshake",
+        help_text="Shown in the diagram above the steps.",
+    )
     title = models.CharField(max_length=80)
     body = models.TextField()
 
@@ -680,3 +749,42 @@ class SiteGalleryImage(SiteSectionItem):
 
     def __str__(self) -> str:
         return self.caption or self.alt_text
+
+
+class SiteShowcase(SiteSectionItem):
+    """One alternating image-and-text block explaining a feature properly.
+
+    The feature cards are deliberately terse — six of them have to scan at a
+    glance. These are where a claim gets room to be explained, so each one
+    pairs a photograph with a few sentences and some concrete bullet points.
+    """
+
+    title = models.CharField(max_length=100)
+    body = models.TextField(help_text="Two or three sentences.")
+    bullets = models.TextField(
+        blank=True,
+        help_text="One per line. Shown as a ticked list under the text. "
+                  "Leave empty for none.",
+    )
+    image = models.ImageField(
+        upload_to="site_content/", null=True, blank=True,
+        help_text="Landscape, at least 1000px wide. Until one is uploaded "
+                  "the block shows a plain panel in its place.",
+    )
+    image_alt = models.CharField(
+        max_length=200, blank=True,
+        help_text="Describes the photo for screen readers.",
+    )
+
+    class Meta(SiteSectionItem.Meta):
+        abstract = False
+        ordering = ["order", "id"]
+        verbose_name = "Site feature deep-dive"
+
+    def __str__(self) -> str:
+        return self.title
+
+    def bullet_list(self) -> list[str]:
+        """``bullets`` split into lines, blanks dropped."""
+        return [line.strip() for line in self.bullets.splitlines()
+                if line.strip()]
