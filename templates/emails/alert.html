@@ -1,9 +1,11 @@
 {% extends "emails/base.html" %}
 
-{# Operational alert to officers or the platform team: a new application, a
-   join request, an approval waiting, a transaction recorded. Deliberately
-   plain — these are read quickly on a phone, so the detail rows carry the
-   information and the CTA goes straight to the thing that needs attention. #}
+{% comment %}
+Operational alert to officers or the platform team: a new application, a join
+request, an approval waiting, a transaction recorded. Deliberately plain —
+these are read quickly on a phone, so the detail rows carry the information
+and the CTA goes straight to the thing that needs attention.
+{% endcomment %}
 
 {% block preheader %}{{ heading }}{% endblock %}
 

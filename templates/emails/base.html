@@ -5,8 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ subject }}</title>
 </head>
-{# Email clients strip <style> unpredictably, so everything is inlined and the
-   layout is table-based. Palette mirrors frontend/src/theme.css. #}
+{% comment %}
+Email clients strip style blocks unpredictably, so everything here is inlined
+and the layout is table-based. Palette mirrors frontend/src/theme.css.
+
+This must use comment/endcomment. The hash form is single-line only, and a
+two-line version of this very note rendered verbatim into every message. It
+mentioned a style tag, and an HTML parser treats everything after an unclosed
+style tag as stylesheet text — so the whole email body was swallowed and
+recipients saw one stray fragment and nothing else.
+{% endcomment %}
 <body style="margin:0;padding:0;background:#f4f1ea;">
   <div style="display:none;font-size:1px;color:#f4f1ea;max-height:0;overflow:hidden;">
     {% block preheader %}{{ subject }}{% endblock %}
@@ -29,9 +37,11 @@
                       <img src="{{ logo_url }}" alt="" width="36" height="36"
                            style="display:block;border-radius:8px;background:#d99e2b;">
                     {% else %}
-                      {# Most societies have not uploaded a logo yet. A gold
-                         initial keeps the brand mark present either way, so the
-                         header never renders as a bare green band. #}
+                      {% comment %}
+                      Most cooperatives have not uploaded a logo yet. A gold
+                      initial keeps the brand mark present either way, so the
+                      header never renders as a bare green band.
+                      {% endcomment %}
                       <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                         <tr>
                           <td width="36" height="36" align="center" valign="middle"

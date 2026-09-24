@@ -1,8 +1,13 @@
 {% extends "emails/base.html" %}
 
-{# A receipt for money recorded against a member: a contribution, or a loan
-   repayment. Members keep these, and some print them, so the figures are laid
-   out plainly rather than buried in prose. #}
+{% comment %}
+A receipt for money recorded against a member: a contribution, or a loan
+repayment. Members keep these, and some print them, so the figures are laid
+out plainly rather than buried in prose.
+
+comment/endcomment, not the hash form — that one is single-line only and
+renders verbatim into the message when it wraps.
+{% endcomment %}
 
 {% block preheader %}{{ headline }} — {{ amount }} recorded on {{ occurred_on }}.{% endblock %}
 
@@ -56,8 +61,7 @@
   <p style="margin:18px 0 0;color:#6f6b62;font-size:13px;">
     This entry is recorded in your cooperative's ledger and appears on your
     statement. If anything here looks wrong, contact your cooperative's
-    officers —
-    corrections are made by a reversing entry, so the original record stays
-    visible for audit.
+    officers — corrections are made by a reversing entry, so the original
+    record stays visible for audit.
   </p>
 {% endblock %}

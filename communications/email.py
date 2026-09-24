@@ -16,6 +16,7 @@ Two deliberate choices:
 from __future__ import annotations
 
 import logging
+from html import unescape
 
 from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
@@ -92,7 +93,12 @@ def send_branded_email(*, to, subject, template, context=None,
         logger.exception("Could not render email template %s", template)
         return False
 
-    text = strip_tags(html)
+    # strip_tags removes markup but leaves entities encoded, so an escaped
+    # ampersand survives into the text part: a reset link arrives as
+    # "?uid=MQ&amp;token=..." and the token is read as "amp;token", which
+    # breaks the link for anyone whose client prefers plain text. The HTML
+    # part is unaffected, so this fails quietly for a subset of readers.
+    text = unescape(strip_tags(html))
     # Collapse the whitespace the HTML layout leaves behind.
     text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
 
