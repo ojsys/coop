@@ -8,6 +8,7 @@ an admin does in the Django admin actually reaches the page.
 from __future__ import annotations
 
 import base64
+import json
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -114,6 +115,20 @@ def test_editing_the_headline_changes_the_payload():
     hero = APIClient().get(URL).json()["hero"]
     assert hero["title"] == "Cooperatives, run properly."
     assert hero["subtitle"] == "A new subtitle."
+
+
+def test_public_copy_says_cooperative_not_society():
+    """One word for one thing, everywhere a visitor can read it.
+
+    This copy lives in the database, so renaming it in the code alone would
+    leave a deployed site still saying "society" — the seeded rows are what
+    actually render. Asserting on the whole payload catches a heading, a
+    bullet or a button label that a targeted rename missed.
+    """
+    blob = json.dumps(APIClient().get(URL).json()).lower()
+    assert "societ" not in blob, (
+        "public site copy should say cooperative, not society"
+    )
 
 
 def test_default_copy_is_not_region_specific():

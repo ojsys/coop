@@ -489,7 +489,7 @@ class SiteContent(TimeStampedModel):
     )
     hero_primary_cta = models.CharField(max_length=40, default="Get started")
     hero_secondary_cta = models.CharField(
-        max_length=40, default="Sign in to your society")
+        max_length=40, default="Sign in to your cooperative")
     hero_image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
         help_text="A wide photograph beside the headline. Landscape, at least "
@@ -508,7 +508,8 @@ class SiteContent(TimeStampedModel):
         max_length=120, default="Ledger, not custodian.")
     principle_body = models.TextField(
         default="Money moves through licensed payment providers into your "
-                "society's own bank account. We record, reconcile and report "
+                "cooperative's own bank account. We record, reconcile and "
+                "report "
                 "on it — we never hold member funds in a platform wallet. "
                 "That is a deliberate engineering and regulatory choice, and "
                 "it is why your money never depends on us staying solvent.",
@@ -516,7 +517,7 @@ class SiteContent(TimeStampedModel):
 
     # ── Section headings ────────────────────────────────────────────────────
     features_title = models.CharField(
-        max_length=120, default="Everything a society runs on")
+        max_length=120, default="Everything a cooperative runs on")
     features_intro = models.TextField(
         default="Replacing the member register, the contribution book and the "
                 "annual scramble to produce accounts.",
@@ -529,18 +530,19 @@ class SiteContent(TimeStampedModel):
     gallery_intro = models.TextField(
         blank=True,
         default="Treasurers, secretaries and members — the people who keep a "
-                "society running, wherever it is.",
+                "cooperative running, wherever it is.",
     )
 
     # ── Pricing ─────────────────────────────────────────────────────────────
     pricing_title = models.CharField(
         max_length=120, default="Pricing that follows your size")
     pricing_intro = models.TextField(
-        default="A monthly subscription per society — not a cut of your "
+        default="A monthly subscription per cooperative — not a cut of your "
                 "members' money.",
     )
     pricing_fallback = models.TextField(
-        default="Pricing depends on your society's size and how much history "
+        default="Pricing depends on your cooperative's size and how much "
+                "history "
                 "needs migrating.",
         help_text="Shown when no plans are published yet. The 'talk to us' "
                   "link is added automatically.",
@@ -574,7 +576,8 @@ class SiteContent(TimeStampedModel):
         max_length=120, default="A closer look at the day-to-day")
     showcase_intro = models.TextField(
         blank=True,
-        default="The parts of running a society that take the most time, and "
+        default="The parts of running a cooperative that take the most time, "
+                "and "
                 "what replaces them.",
     )
 
@@ -620,13 +623,14 @@ class SiteContent(TimeStampedModel):
 
     # ── Closing call to action ──────────────────────────────────────────────
     cta_title = models.CharField(
-        max_length=160, default="Ready to bring your society on board?")
+        max_length=160, default="Ready to bring your cooperative on board?")
     cta_body = models.TextField(
-        default="Tell us about your society and we will talk through what "
+        default="Tell us about your cooperative and we will talk through what "
                 "needs migrating. Nothing is charged until you decide to go "
                 "ahead.",
     )
-    cta_button = models.CharField(max_length=40, default="Apply as a society")
+    cta_button = models.CharField(max_length=40,
+                                  default="Apply as a cooperative")
     cta_image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
         help_text="Optional photograph behind the closing banner. A wide, "
@@ -667,7 +671,7 @@ class SiteSectionItem(TimeStampedModel):
 
 
 class SiteFeature(SiteSectionItem):
-    """One card in the "Everything a society runs on" grid."""
+    """One card in the "Everything a cooperative runs on" grid."""
 
     icon = models.CharField(max_length=40, choices=ICON_CHOICES,
                             default="group")

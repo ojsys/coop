@@ -29,7 +29,7 @@ def _unique_slug(name: str) -> str:
     """A URL-safe slug that doesn't collide with an existing society."""
     from tenants.models import Cooperative
 
-    base = slugify(name)[:70] or "society"
+    base = slugify(name)[:70] or "cooperative"
     slug, n = base, 1
     while Cooperative.objects.filter(slug=slug).exists():
         n += 1
@@ -99,7 +99,7 @@ def _notify_application(*, cooperative, applicant_name, applicant_email,
     )
 
     rows = [
-        ("Society", cooperative.name),
+        ("Cooperative", cooperative.name),
         ("Contact", f"{applicant_name} <{applicant_email}>"),
         ("Phone", applicant_phone or "—"),
         ("Location", " · ".join(filter(None, (
@@ -120,7 +120,7 @@ def _notify_application(*, cooperative, applicant_name, applicant_email,
     send_alert_email(
         to=platform_support_email(),
         subject=f"New cooperative application: {cooperative.name}",
-        heading="A society has applied to join",
+        heading="A cooperative has applied to join",
         intro="It has been created as PROSPECTIVE and added to the onboarding "
               "pipeline at the Discovery stage.",
         rows=rows,
@@ -138,8 +138,8 @@ def request_to_join(*, cooperative, full_name, email, phone="", message=""):
     ).exists()
     if already_a_member:
         raise SignupError(
-            "That email address already belongs to a member of this society. "
-            "Try signing in, or use 'Forgot password'."
+            "That email address already belongs to a member of this "
+            "cooperative. Try signing in, or use 'Forgot password'."
         )
 
     # Portable stand-in for the partial unique index MySQL cannot express.
@@ -149,8 +149,8 @@ def request_to_join(*, cooperative, full_name, email, phone="", message=""):
     ).exists()
     if duplicate:
         raise SignupError(
-            "You already have a request waiting with this society. An officer "
-            "will be in touch."
+            "You already have a request waiting with this cooperative. An "
+            "officer will be in touch."
         )
 
     request = JoinRequest.all_objects.create(
@@ -176,7 +176,7 @@ def _notify_join_request(request):
     send_alert_email(
         to=recipients,
         subject=f"New membership request: {request.full_name}",
-        heading="Someone has asked to join your society",
+        heading="Someone has asked to join your cooperative",
         intro="Review it under Members → Join requests in the console.",
         cooperative=request.cooperative,
         rows=[

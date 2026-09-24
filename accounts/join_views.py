@@ -125,7 +125,8 @@ class JoinRequestCreateView(PublicView):
         ).first()
         if cooperative is None:
             raise serializers.ValidationError(
-                {"cooperative": ["That society is not accepting requests."]})
+                {"cooperative": ["That cooperative is not accepting "
+                                 "requests."]})
 
         try:
             request_to_join(cooperative=cooperative, **data)
@@ -133,8 +134,9 @@ class JoinRequestCreateView(PublicView):
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 
         return Response(
-            {"detail": "Your request has been sent. An officer of the society "
-                       "will review it and you'll hear from us by email."},
+            {"detail": "Your request has been sent. An officer of the "
+                       "cooperative will review it and you'll hear from us "
+                       "by email."},
             status=status.HTTP_201_CREATED,
         )
 
