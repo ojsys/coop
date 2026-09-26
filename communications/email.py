@@ -174,6 +174,65 @@ def send_password_reset_email(user, cooperative=None) -> bool:
     )
 
 
+def cooperative_notification_emails(cooperative) -> list[str]:
+    """Where mail addressed to a cooperative itself should go.
+
+    Its published contact address plus every privileged officer — the contact
+    address is often the applicant's, and by go-live the people who need to
+    act on it may be different. De-duplicated case-insensitively so an officer
+    who is also the contact is not mailed twice.
+    """
+    from accounts.models import Membership
+
+    addresses = []
+    if cooperative.contact_email:
+        addresses.append(cooperative.contact_email)
+
+    officers = (
+        Membership.all_objects
+        .filter(cooperative=cooperative, status=Membership.Status.ACTIVE)
+        .select_related("user", "role")
+    )
+    addresses += [m.user.email for m in officers
+                  if m.role and m.role.is_privileged and m.user.email]
+
+    seen, unique = set(), []
+    for address in addresses:
+        key = address.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(address.strip())
+    return unique
+
+
+def send_go_live_email(cooperative) -> bool:
+    """Announce to a cooperative that its account is live.
+
+    Returns False when there is nobody to tell, which is worth logging: a
+    cooperative with no contact address and no privileged officer has gone
+    live with no one informed.
+    """
+    recipients = cooperative_notification_emails(cooperative)
+    if not recipients:
+        logger.warning(
+            "No contact address or privileged officer for %s — the go-live "
+            "announcement could not be sent", cooperative,
+        )
+        return False
+
+    return send_branded_email(
+        to=recipients,
+        subject=f"{cooperative.name} is now live",
+        template="emails/go_live.html",
+        cooperative=cooperative,
+        context={
+            "coop_name": cooperative.name,
+            "cta_url": _absolute("/login"),
+            "cta_label": "Sign in to your cooperative",
+        },
+    )
+
+
 def send_welcome_email(membership) -> bool:
     """Invite a newly added member to set their own password.
 

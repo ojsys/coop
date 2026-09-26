@@ -38,6 +38,36 @@ def start_onboarding(cooperative, owner=None):
     return item
 
 
+def notify_go_live(item, *, force: bool = False) -> bool:
+    """Send the go-live announcement for one onboarding item.
+
+    The single path used by the automatic send, the admin's resend action and
+    the management command, so all three behave identically.
+
+    Sends once by default: ``advance`` dispatches this on commit, and calling
+    it again must not mail the cooperative twice. ``force=True`` is the resend
+    — for the case that matters in practice, where the message went out but
+    never arrived.
+
+    Never raises. A cooperative that is live but un-announced is a nuisance; an
+    exception here escaping into an activation would be worse.
+    """
+    from django.utils import timezone
+
+    from communications.email import send_go_live_email
+
+    if item.cooperative_id is None:
+        return False
+    if item.golive_email_sent_at and not force:
+        return False
+
+    sent = send_go_live_email(item.cooperative)
+    if sent:
+        item.golive_email_sent_at = timezone.now()
+        item.save(update_fields=["golive_email_sent_at", "updated_at"])
+    return sent
+
+
 # ── Invoice numbering ───────────────────────────────────────────────────────
 def next_invoice_number() -> str:
     """Suggest the next ``INV-YYYY-N`` number for the current year.

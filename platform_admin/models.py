@@ -144,6 +144,14 @@ class OnboardingItem(TimeStampedModel):
     )
     target_go_live = models.DateField(null=True, blank=True)
     notes = models.TextField(blank=True)
+    # Recorded only when the relay accepted the go-live email. Null therefore
+    # means "never sent", which is a different problem from "sent but never
+    # arrived" — and telling them apart is the whole point of storing it.
+    golive_email_sent_at = models.DateTimeField(
+        null=True, blank=True, editable=False,
+        help_text="When the go-live announcement was last sent to the "
+                  "cooperative. Empty means it has never gone out.",
+    )
 
     class Meta:
         ordering = ["stage", "-created_at"]
@@ -186,6 +194,16 @@ class OnboardingItem(TimeStampedModel):
                     action="cooperative.go_live", entity=coop,
                     before={"status": before}, after={"status": coop.status},
                 )
+
+                # Tell the cooperative it is live. Dispatched after commit so
+                # a mail failure can never roll back an activation, and sent
+                # from inside this branch so advancing Go-live -> Done does
+                # not announce it a second time.
+                from django.db import transaction
+
+                from platform_admin.services import notify_go_live
+
+                transaction.on_commit(lambda: notify_go_live(self))
         return self
 
 

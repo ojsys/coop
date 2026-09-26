@@ -60,14 +60,14 @@ class InvoiceAdmin(admin.ModelAdmin):
 @admin.register(OnboardingItem)
 class OnboardingItemAdmin(admin.ModelAdmin):
     list_display = ("display_name", "stage", "owner", "target_go_live",
-                    "cooperative")
+                    "cooperative", "golive_email_sent_at")
     list_filter = ("stage", "owner", "target_go_live")
     search_fields = ("prospect_name", "cooperative__name", "notes")
     ordering = ("stage", "-created_at")
     autocomplete_fields = ("cooperative", "owner")
     list_select_related = ("cooperative", "owner")
-    readonly_fields = ("created_at", "updated_at")
-    actions = ("advance_stage",)
+    readonly_fields = ("golive_email_sent_at", "created_at", "updated_at")
+    actions = ("advance_stage", "resend_go_live_email")
 
     @admin.display(description="Cooperative / prospect")
     def display_name(self, obj):
@@ -82,6 +82,34 @@ class OnboardingItemAdmin(admin.ModelAdmin):
             request, f"Advanced {queryset.count()} onboarding item(s).",
             messages.SUCCESS,
         )
+
+    @admin.action(description="Resend the go-live email")
+    def resend_go_live_email(self, request, queryset):
+        """Send it again — for when it went out but never arrived.
+
+        Forced, so the "already sent" guard does not silently do nothing: an
+        admin reaching for this has been told the mail did not turn up.
+        """
+        from platform_admin.services import notify_go_live
+
+        sent, failed = [], []
+        for item in queryset:
+            (sent if notify_go_live(item, force=True) else failed).append(
+                item.display_name)
+
+        if sent:
+            self.message_user(
+                request, f"Go-live email sent to: {', '.join(sent)}.",
+                messages.SUCCESS,
+            )
+        if failed:
+            self.message_user(
+                request,
+                f"Could not send to: {', '.join(failed)}. Either the "
+                f"cooperative has no contact address and no privileged "
+                f"officer, or the relay rejected it — check logs/app.log.",
+                messages.WARNING,
+            )
 
 
 # ── White-label domains ─────────────────────────────────────────────────────

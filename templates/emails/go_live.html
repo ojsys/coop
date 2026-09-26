@@ -1,0 +1,56 @@
+{% extends "emails/base.html" %}
+
+{% comment %}
+Sent once, when the onboarding pipeline reaches Go-live and the tenant is
+switched to ACTIVE. Addressed to the cooperative's own contact plus its
+privileged officers — not to members, who get their own welcome mail when an
+officer admits them.
+
+comment/endcomment, never the hash form: that one is single-line only and
+renders verbatim into the message if it wraps.
+{% endcomment %}
+
+{% comment %}
+Not "{{ brand_name }}" here: brand_context sets that to the *cooperative's*
+own name whenever one is passed, which is what makes the mail wear their
+branding — so using it alongside coop_name named them twice in the inbox
+preview line.
+{% endcomment %}
+{% block preheader %}{{ coop_name }} is live — members can be added and contributions recorded from today.{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello,</p>
+
+  <p style="margin:0 0 14px;">
+    <strong>{{ coop_name }}</strong> is now live. Your account has moved out of
+    onboarding, and everything is ready to use.
+  </p>
+
+  <p style="margin:0 0 6px;font-weight:700;color:#1b1a17;">What you can do now</p>
+  <ul style="margin:0 0 14px;padding-left:18px;">
+    <li style="margin-bottom:6px;">
+      Add members, or admit the ones who have asked to join.
+    </li>
+    <li style="margin-bottom:6px;">
+      Record contributions and dues — each one posts straight to your ledger.
+    </li>
+    <li style="margin-bottom:6px;">
+      Open loan applications, meetings and resolutions.
+    </li>
+    <li>
+      Members sign in to see their own statements, so they stop having to ask.
+    </li>
+  </ul>
+
+  <p style="margin:0 0 14px;">
+    Your figures come from an append-only double-entry ledger: nothing is edited
+    after the fact, and a correction is recorded as a reversal with the original
+    left visible. That is what makes the books answerable to an auditor.
+  </p>
+
+  <p style="margin:18px 0 0;color:#6f6b62;font-size:13px;">
+    Money settles into your cooperative's own bank account — we record and
+    reconcile it, we never hold it. If anything looks wrong, reply to this email
+    and we will look at it with you.
+  </p>
+{% endblock %}
