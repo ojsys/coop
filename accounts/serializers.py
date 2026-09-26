@@ -60,6 +60,26 @@ class RoleSerializer(serializers.ModelSerializer):
         model = Role
         fields = ["id", "slug", "name", "permissions", "is_privileged"]
 
+    def validate(self, attrs):
+        """Do not let a permission edit strip the last officers of privilege.
+
+        Editing a role is how permissions are tuned — the point of the screen
+        — but is_privileged is computed from this list, so clearing it demotes
+        every holder at once and can empty a cooperative of officers.
+        """
+        from accounts.join_services import (
+            LastOfficerError, check_role_keeps_officers,
+        )
+
+        if self.instance is None or "permissions" not in attrs:
+            return attrs
+        try:
+            check_role_keeps_officers(self.instance, attrs["permissions"])
+        except LastOfficerError as exc:
+            raise serializers.ValidationError(
+                {"permissions": [str(exc)]}) from exc
+        return attrs
+
 
 class MembershipSerializer(serializers.ModelSerializer):
     # Accept nested user details on create; expose read-only summary.
@@ -94,6 +114,33 @@ class MembershipSerializer(serializers.ModelSerializer):
             },
         )
         return Membership.objects.create(user=user, **validated_data)
+
+    def validate(self, attrs):
+        """Do not let the last officer be demoted or deactivated.
+
+        Role changes are how admin is granted and revoked, which is the point
+        — but revoking the only one leaves a cooperative nobody can manage.
+        """
+        from accounts.join_services import LastOfficerError, check_officer_remains
+
+        if self.instance is None:
+            return attrs
+        if "role" not in attrs and "status" not in attrs:
+            return attrs
+
+        try:
+            # Pass only what is actually being changed. Using .get() with a
+            # fallback would turn an explicit "clear the role" into "no
+            # change" and wave the demotion through.
+            changes = {}
+            if "role" in attrs:
+                changes["new_role"] = attrs["role"]
+            if "status" in attrs:
+                changes["new_status"] = attrs["status"]
+            check_officer_remains(self.instance, **changes)
+        except LastOfficerError as exc:
+            raise serializers.ValidationError({"role": [str(exc)]}) from exc
+        return attrs
 
     def update(self, instance, validated_data):
         # Editable: the person's name/phone (on the shared User) plus the

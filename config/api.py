@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from django.urls import include, path
-from rest_framework.authtoken.views import obtain_auth_token
 from rest_framework.routers import DefaultRouter
 
 from accounts.member_views import (
@@ -11,7 +10,7 @@ from accounts.member_views import (
     MemberSavingsProductViewSet,
 )
 from accounts.auth_views import (
-    PasswordResetConfirmView, PasswordResetRequestView,
+    LoginView, PasswordResetConfirmView, PasswordResetRequestView,
 )
 from accounts.join_views import (
     CooperativeApplicationView, JoinRequestCreateView, JoinRequestViewSet,
@@ -114,7 +113,7 @@ router.register("notification-templates", NotificationTemplateViewSet,
                 basename="notification-template")
 
 urlpatterns = [
-    path("auth/token/", obtain_auth_token, name="api-token"),
+    path("auth/token/", LoginView.as_view(), name="api-token"),
     path("auth/password-reset/", PasswordResetRequestView.as_view(),
          name="password-reset"),
     path("auth/password-reset/confirm/", PasswordResetConfirmView.as_view(),

@@ -98,6 +98,12 @@ REST_FRAMEWORK = {
         'password_reset': '5/hour',
         # Public signup writes rows and sends mail on behalf of a stranger.
         'signup': '10/hour',
+        # Login is the one endpoint that accepts guessed passwords. The scope
+        # counts successful sign-ins too, so the rate is sized for a whole
+        # cooperative office behind a single NAT address arriving at 9am —
+        # tight enough to stop automated stuffing, which runs orders of
+        # magnitude faster than any human queue.
+        'login': '30/min',
     },
 }
 

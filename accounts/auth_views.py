@@ -14,6 +14,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
 from rest_framework import serializers, status
+from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
@@ -27,6 +28,23 @@ from communications.email import send_password_reset_email
 GENERIC_RESPONSE = {
     "detail": "If that address has an account, a reset link is on its way.",
 }
+
+
+class LoginView(ObtainAuthToken):
+    """`POST /auth/token/` — exchange credentials for a token.
+
+    DRF's stock ``obtain_auth_token`` is unthrottled, which left the only
+    endpoint that accepts guessed passwords wide open while password reset and
+    public signup were both rate limited.
+
+    A per-account backoff would be the stronger control if this is ever
+    targeted in earnest; per-IP is the blunt version, chosen here because it
+    cannot be used to lock a member out of their own account by guessing at
+    their address.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "login"
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):

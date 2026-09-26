@@ -139,29 +139,44 @@ class CooperativeViewSet(mixins.ListModelMixin,
                 {"detail": "Explicit consent is required to impersonate."},
                 status=400,
             )
-        # Impersonate a privileged official of this cooperative.
-        target = None
         memberships = (
             Membership.all_objects.filter(
                 cooperative=coop, status=Membership.Status.ACTIVE)
             .select_related("user", "role")
         )
-        for m in memberships:
-            if m.role and m.role.is_privileged:
-                target = m
-                break
-        if target is None:
-            return Response(
-                {"detail": "This cooperative has no privileged official to "
-                           "impersonate."},
-                status=400,
+
+        # A specific member when the platform console names one (support is
+        # usually reproducing *that* person's problem), otherwise fall back to
+        # any officer so the existing one-click flow still works.
+        requested = request.data.get("membership")
+        if requested:
+            target = memberships.filter(pk=requested).first()
+            if target is None:
+                return Response(
+                    {"detail": "That member is not an active member of this "
+                               "cooperative."},
+                    status=404,
+                )
+        else:
+            target = next(
+                (m for m in memberships if m.role and m.role.is_privileged),
+                None,
             )
+            if target is None:
+                return Response(
+                    {"detail": "This cooperative has no privileged official "
+                               "to impersonate. Add one, or name a specific "
+                               "member to impersonate."},
+                    status=400,
+                )
 
         token, _ = Token.objects.get_or_create(user=target.user)
+        role_name = target.role.name if target.role else "Member"
+        is_privileged = bool(target.role and target.role.is_privileged)
         record_action(
             cooperative=coop, actor=request.user, action="cooperative.impersonate",
             entity=target.user, entity_repr=target.user.full_name,
-            after={"member_no": target.member_no, "role": target.role.name},
+            after={"member_no": target.member_no, "role": role_name},
         )
         return Response({
             "token": token.key,
@@ -170,7 +185,10 @@ class CooperativeViewSet(mixins.ListModelMixin,
                 "full_name": target.user.full_name,
                 "email": target.user.email,
                 "member_no": target.member_no,
-                "role": target.role.name,
+                "role": role_name,
+                # Which surface to open: an ordinary member has no console,
+                # so sending them there would land on a permission wall.
+                "is_privileged": is_privileged,
             },
         })
 

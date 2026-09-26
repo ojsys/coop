@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from django import forms
 from django.contrib import admin
 from django.contrib.auth import forms as auth_forms
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
@@ -89,8 +90,40 @@ class UserAdmin(BaseUserAdmin):
     )
 
 
+class RoleAdminForm(forms.ModelForm):
+    """Applies the last-officer rule to permission edits in the admin.
+
+    RoleSerializer enforces it for the API; the admin edits Role.permissions
+    directly and would otherwise walk straight past it.
+    """
+
+    class Meta:
+        model = Role
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        if not self.instance.pk:
+            return cleaned
+        if "permissions" not in set(self.changed_data or ()):
+            return cleaned
+
+        from accounts.join_services import (
+            LastOfficerError, check_role_keeps_officers,
+        )
+
+        previous = Role.all_objects.get(pk=self.instance.pk)
+        try:
+            check_role_keeps_officers(previous, cleaned.get("permissions") or [])
+        except LastOfficerError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+        return cleaned
+
+
 @admin.register(Role)
 class RoleAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
+    form = RoleAdminForm
+
     list_display = ("name", "slug", "cooperative", "is_privileged")
     list_filter = ("cooperative", "slug")
     search_fields = ("name", "slug")
@@ -112,8 +145,46 @@ class MemberDocumentInline(TenantScopedTabularInline):
     readonly_fields = ("created_at",)
 
 
+class MembershipAdminForm(forms.ModelForm):
+    """Applies the last-officer rule to admin edits.
+
+    MembershipSerializer enforces it for the API, but the admin writes
+    Membership.role directly and would otherwise walk straight past it. It
+    belongs in the form rather than save_model: Django renders a form error,
+    whereas raising from save_model is an uncaught 500.
+    """
+
+    class Meta:
+        model = Membership
+        fields = "__all__"
+
+    def clean(self):
+        cleaned = super().clean()
+        if not self.instance.pk:
+            return cleaned
+        if not ({"role", "status"} & set(self.changed_data or ())):
+            return cleaned
+
+        from accounts.join_services import (
+            LastOfficerError, check_officer_remains,
+        )
+
+        previous = Membership.all_objects.get(pk=self.instance.pk)
+        try:
+            check_officer_remains(
+                previous,
+                new_role=cleaned.get("role"),
+                new_status=cleaned.get("status", previous.status),
+            )
+        except LastOfficerError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+        return cleaned
+
+
 @admin.register(Membership)
 class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
+    form = MembershipAdminForm
+
     list_display = ("member_no", "member_name", "cooperative", "role", "status",
                     "share_capital", "savings_balance", "joined_at")
     list_filter = ("status", "cooperative", "role", "gender", "joined_at")

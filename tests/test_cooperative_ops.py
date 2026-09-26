@@ -89,6 +89,78 @@ def test_impersonate_needs_a_privileged_official(api, coop):
     assert resp.status_code == 400
 
 
+# ── Impersonating a named member ────────────────────────────────────────────
+# Support is usually reproducing one particular person's problem, so the
+# platform console needs to open *their* session rather than any officer's.
+def _plain_member(coop, email="ada@imole.coop"):
+    with use_tenant(coop):
+        user = User.objects.create_user(email=email, full_name="Ada Okonkwo")
+        return Membership.objects.create(
+            user=user, member_no="IMC-77",
+            role=Role.objects.filter(slug="member").first())
+
+
+def test_impersonate_a_named_member(api, coop, secretary):
+    membership = _plain_member(coop)
+
+    resp = api.post(f"/api/v1/cooperatives/{coop.id}/impersonate/",
+                    {"consent": True, "membership": membership.id},
+                    format="json")
+
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["user"]["email"] == "ada@imole.coop"
+    assert body["user"]["member_no"] == "IMC-77"
+    assert body["token"]
+
+
+def test_impersonating_an_ordinary_member_says_which_surface(api, coop,
+                                                             secretary):
+    """A plain member has no console; sending them there is a permission wall."""
+    membership = _plain_member(coop)
+
+    resp = api.post(f"/api/v1/cooperatives/{coop.id}/impersonate/",
+                    {"consent": True, "membership": membership.id},
+                    format="json")
+
+    assert resp.json()["user"]["is_privileged"] is False
+
+
+def test_impersonating_an_officer_is_flagged_privileged(api, coop, secretary):
+    membership = Membership.all_objects.get(user=secretary, cooperative=coop)
+
+    resp = api.post(f"/api/v1/cooperatives/{coop.id}/impersonate/",
+                    {"consent": True, "membership": membership.id},
+                    format="json")
+
+    assert resp.json()["user"]["is_privileged"] is True
+
+
+def test_cannot_impersonate_a_member_of_another_cooperative(api, coop,
+                                                            other_coop):
+    """The membership id is caller-supplied, so it must be checked against
+    the cooperative in the URL rather than trusted."""
+    with use_tenant(other_coop):
+        user = User.objects.create_user(email="outsider@other.coop",
+                                        full_name="Outsider")
+        foreign = Membership.objects.create(
+            user=user, member_no="OTH-1",
+            role=Role.objects.filter(slug="secretary").first())
+
+    resp = api.post(f"/api/v1/cooperatives/{coop.id}/impersonate/",
+                    {"consent": True, "membership": foreign.id},
+                    format="json")
+
+    assert resp.status_code == 404, resp.content
+
+
+def test_impersonation_still_requires_consent_for_a_named_member(api, coop):
+    membership = _plain_member(coop)
+    resp = api.post(f"/api/v1/cooperatives/{coop.id}/impersonate/",
+                    {"membership": membership.id}, format="json")
+    assert resp.status_code == 400
+
+
 # ── Health check ────────────────────────────────────────────────────────────
 def test_health_check_shape(api, coop):
     resp = api.get(f"/api/v1/cooperatives/{coop.id}/health-check/")

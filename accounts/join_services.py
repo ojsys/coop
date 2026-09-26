@@ -48,6 +48,184 @@ def _officer_emails(cooperative) -> list[str]:
             if m.role and m.role.is_privileged and m.user.email]
 
 
+class LastOfficerError(Exception):
+    """Refused: the change would leave a cooperative with no officer."""
+
+
+_UNSET = object()
+
+
+def check_officer_remains(membership, *, new_role=_UNSET, new_status=_UNSET):
+    """Refuse a change that would strip a cooperative of its last officer.
+
+    Admin is meant to be revocable — you asked for that — but a cooperative
+    with nobody holding members.manage can no longer admit members, assign
+    roles or be handed on. It is the exact dead end that leaves a cooperative
+    unreachable, and it is reached by one careless self-demotion.
+
+    Called by both the API serializer and the Django admin, because the admin
+    edits Membership.role directly and would otherwise walk straight past a
+    serializer-only check.
+    """
+    from accounts.models import Membership, Role
+
+    # A sentinel, not None: clearing the role outright is precisely the
+    # destructive edit this guards, and None-means-unchanged would wave it
+    # through.
+    role = membership.role if new_role is _UNSET else new_role
+    status = membership.status if new_status is _UNSET else new_status
+
+    still_privileged = (
+        status == Membership.Status.ACTIVE
+        and role is not None
+        and role.is_privileged
+    )
+    if still_privileged:
+        return
+
+    was_privileged = (
+        membership.status == Membership.Status.ACTIVE
+        and membership.role is not None
+        and membership.role.is_privileged
+    )
+    if not was_privileged:
+        return  # they were not an officer, so none is being removed
+
+    others = (
+        Membership.all_objects
+        .filter(cooperative=membership.cooperative,
+                status=Membership.Status.ACTIVE)
+        .exclude(pk=membership.pk)
+        .select_related("role")
+    )
+    if any(m.role and m.role.is_privileged for m in others):
+        return
+
+    raise LastOfficerError(
+        f"{membership.user.full_name} is the only officer of "
+        f"{membership.cooperative.name}. Give someone else a privileged role "
+        f"first — {Role.SECRETARY} or {Role.TREASURER} — or the cooperative "
+        f"would be left with nobody who can manage it."
+    )
+
+
+def check_role_keeps_officers(role, new_permissions):
+    """Refuse a permission edit that would leave a cooperative with no officer.
+
+    ``Role.is_privileged`` is derived from ``permissions``, so unticking
+    "Manage members" on the Secretary role demotes every member holding it at
+    once. ``check_officer_remains`` only ever inspects a Membership, so it
+    never sees this edit — it is the same dead end reached by another door,
+    and the role editor is the door an officer is most likely to open.
+    """
+    from accounts.models import Membership, Role
+
+    if not role.is_privileged:
+        return  # it granted nothing, so it can take nothing away
+    if Role.PRIVILEGED_PERMISSIONS.intersection(new_permissions or ()):
+        return  # still privileged after the edit
+
+    holders = Membership.all_objects.filter(
+        cooperative=role.cooperative, role=role,
+        status=Membership.Status.ACTIVE,
+    )
+    count = holders.count()
+    if count == 0:
+        return  # nobody holds it, so nobody is demoted
+
+    others = (
+        Membership.all_objects
+        .filter(cooperative=role.cooperative,
+                status=Membership.Status.ACTIVE)
+        .exclude(role=role)
+        .select_related("role")
+    )
+    if any(m.role and m.role.is_privileged for m in others):
+        return
+
+    who = "1 member holds it" if count == 1 else f"{count} members hold it"
+    raise LastOfficerError(
+        f"{role.name} is the only privileged role in use at "
+        f"{role.cooperative.name} and {who}. Removing those permissions would "
+        f"leave the cooperative with nobody who can manage it — give someone "
+        f"else a privileged role first."
+    )
+
+
+def _next_member_no(cooperative) -> str:
+    """Allocate a free member number for a cooperative.
+
+    House style is a short prefix and a sequence (IMC-0001), the prefix taken
+    from the cooperative's initials so the number reads sensibly on a
+    statement. ``uniq_member_no_per_coop`` is a database constraint, so this
+    checks what is taken rather than assuming a count is safe — members can be
+    imported or deleted, and a count would collide.
+    """
+    import re
+    import unicodedata
+
+    ascii_name = (unicodedata.normalize("NFKD", cooperative.name)
+                  .encode("ascii", "ignore").decode())
+    initials = "".join(w[0] for w in re.findall(r"[A-Za-z]+", ascii_name))
+    prefix = (initials[:4] or "MEM").upper()
+
+    taken = set(
+        Membership.all_objects.filter(cooperative=cooperative)
+        .values_list("member_no", flat=True)
+    )
+    n = 1
+    while f"{prefix}-{n:04d}" in taken:
+        n += 1
+    return f"{prefix}-{n:04d}"
+
+
+def create_founding_admin(cooperative, *, full_name, email, phone=""):
+    """Give the person who brought a cooperative on board an account and make
+    them its first officer.
+
+    Every cooperative created through the public form used to have no members
+    at all: nobody to email at go-live, nobody who could sign in, and nobody
+    able to admit anyone else. This closes that.
+
+    "Admin" here means the **secretary** role — the only default role carrying
+    members.manage and governance.manage, which is what lets them admit others
+    and hand the role on. It is an ordinary membership, so it can be reassigned
+    or revoked by any officer later.
+
+    No usable password is set: the welcome email invites them to choose one,
+    exactly as approve_join_request does. So applying creates no credential for
+    an address that has not proved it controls the inbox.
+
+    Idempotent — re-running for the same person returns their membership.
+    """
+    user = User.objects.filter(email__iexact=email).first()
+    if user is None:
+        user = User.objects.create_user(
+            email=email, full_name=full_name, phone=phone)
+        user.set_unusable_password()
+        user.save(update_fields=["password"])
+
+    existing = Membership.all_objects.filter(
+        cooperative=cooperative, user=user).first()
+    if existing is not None:
+        return existing
+
+    role = Role.all_objects.filter(
+        cooperative=cooperative, slug=Role.SECRETARY).first()
+    membership = Membership.all_objects.create(
+        cooperative=cooperative, user=user, role=role,
+        member_no=_next_member_no(cooperative),
+        status=Membership.Status.ACTIVE, joined_at=timezone.localdate(),
+    )
+
+    def _welcome():
+        from communications.email import send_welcome_email
+        send_welcome_email(membership)
+
+    transaction.on_commit(_welcome)
+    return membership
+
+
 # ── A society applying to join the platform ─────────────────────────────────
 @transaction.atomic
 def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
@@ -73,6 +251,11 @@ def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
         contact_email=applicant_email,
         contact_phone=applicant_phone,
     )
+
+    # The applicant becomes the cooperative's first officer, so it is never
+    # left with nobody who can sign in or be notified.
+    create_founding_admin(cooperative, full_name=applicant_name,
+                          email=applicant_email, phone=applicant_phone)
 
     item = start_onboarding(cooperative)
     note = (f"Applied via the website.\n"

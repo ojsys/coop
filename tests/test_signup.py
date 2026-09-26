@@ -2,9 +2,18 @@
 Signup: a society applying to the platform, and a person applying to a society.
 
 Both flows start with a stranger, so the tests lean on the security-relevant
-properties: nothing is created ACTIVE without a human decision, no account
-exists before approval, and an officer of one society cannot see another's
-queue.
+properties: nothing is created ACTIVE without a human decision, and an officer
+of one society cannot see another's queue.
+
+The two flows differ on accounts, deliberately:
+
+* **Asking to join** an existing society creates no account at all until an
+  officer approves — an unapproved stranger must never hold credentials to
+  somebody else's books.
+* **Applying with your own cooperative** does create one, because otherwise
+  the cooperative has no members, nobody to notify at go-live and nobody who
+  can sign in. It is still not a credential: the password is unusable and the
+  welcome email invites them to choose one.
 """
 from __future__ import annotations
 
@@ -77,6 +86,73 @@ def test_application_creates_a_prospective_society_in_the_pipeline():
     assert OnboardingItem.objects.filter(cooperative=society).exists()
 
 
+def test_applying_makes_the_applicant_the_first_officer():
+    """A cooperative with no members has nobody to email and nobody to sign in.
+
+    Every cooperative created through this form used to be left in exactly
+    that state.
+    """
+    cache.clear()
+    APIClient().post(APPLY_URL, {
+        "society_name": "Founder Test Coop",
+        "applicant_name": "Chidi Okafor",
+        "applicant_email": "chidi@founder.test",
+    }, format="json")
+
+    society = Cooperative.objects.get(name="Founder Test Coop")
+    membership = Membership.all_objects.get(cooperative=society)
+
+    assert membership.user.email == "chidi@founder.test"
+    assert membership.user.full_name == "Chidi Okafor"
+    assert membership.status == Membership.Status.ACTIVE
+    assert membership.role.is_privileged, (
+        "the founder must be able to admit others and hand the role on")
+
+
+def test_the_founder_gets_no_usable_password():
+    """Applying is not proof you control the inbox, so it mints no credential."""
+    cache.clear()
+    APIClient().post(APPLY_URL, {
+        "society_name": "No Password Coop", "applicant_name": "Ada",
+        "applicant_email": "ada@nopassword.test",
+    }, format="json")
+
+    user = User.objects.get(email="ada@nopassword.test")
+    assert not user.has_usable_password()
+
+
+def test_the_founder_gets_a_member_number():
+    cache.clear()
+    APIClient().post(APPLY_URL, {
+        "society_name": "Ìmọ̀lè Multipurpose Cooperative",
+        "applicant_name": "Bola", "applicant_email": "bola@number.test",
+    }, format="json")
+
+    society = Cooperative.objects.get(name="Ìmọ̀lè Multipurpose Cooperative")
+    membership = Membership.all_objects.get(cooperative=society)
+    # Initials of the cooperative, diacritics folded away, then a sequence.
+    assert membership.member_no == "IMC-0001", membership.member_no
+
+
+def test_creating_the_founding_admin_twice_is_harmless():
+    """The backfill re-runs over cooperatives, so this must be idempotent."""
+    from accounts.join_services import create_founding_admin
+
+    cache.clear()
+    APIClient().post(APPLY_URL, {
+        "society_name": "Idempotent Coop", "applicant_name": "Ngozi",
+        "applicant_email": "ngozi@idem.test",
+    }, format="json")
+    society = Cooperative.objects.get(name="Idempotent Coop")
+
+    original = Membership.all_objects.get(cooperative=society)
+    again = create_founding_admin(
+        society, full_name="Ngozi", email="ngozi@idem.test")
+
+    assert again.pk == original.pk, "a second membership was created"
+    assert Membership.all_objects.filter(cooperative=society).count() == 1
+
+
 def test_application_emails_both_the_applicant_and_the_platform(
         django_capture_on_commit_callbacks):
     mail.outbox.clear()
@@ -91,7 +167,22 @@ def test_application_emails_both_the_applicant_and_the_platform(
 
     recipients = [to for m in mail.outbox for to in m.to]
     assert "bola@example.com" in recipients, "the applicant gets an acknowledgement"
-    assert len(mail.outbox) == 2, "the platform team is alerted too"
+
+    # Three, and it is worth naming them: the acknowledgement, the platform
+    # alert, and the welcome that carries the applicant's set-password link.
+    # The last one is what makes the cooperative reachable at all — without it
+    # nobody can ever sign in to it.
+    subjects = sorted(m.subject for m in mail.outbox)
+    assert len(mail.outbox) == 3, subjects
+    assert any("received" in s for s in subjects), "applicant acknowledgement"
+    assert any("New cooperative application" in s for s in subjects), \
+        "the platform team is alerted too"
+    assert any(s.startswith("Welcome to") for s in subjects), \
+        "the applicant is invited to set a password"
+
+    welcome = next(m for m in mail.outbox if m.subject.startswith("Welcome to"))
+    assert "/reset-password?uid=" in welcome.body, \
+        "the welcome must carry a set-password link, never a password"
 
 
 def test_two_societies_with_the_same_name_get_distinct_slugs():
