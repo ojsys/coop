@@ -348,3 +348,118 @@ def test_role_edit_that_keeps_privilege_is_untouched(coop):
     assert resp.status_code == 200, resp.content
     secretary.refresh_from_db()
     assert secretary.is_privileged
+
+
+# ── Creating a contribution type without a slug ─────────────────────────────
+# The console's form collects name, frequency, kind and amount — never a slug.
+# ContributionType.slug is non-blank and was a required serializer field, so
+# every create from that form was refused with "This field is required" naming a
+# field the officer could not see. test_api.py sends an explicit slug and so
+# never covered this.
+def _funds_account(coop):
+    from ledger.models import Account
+
+    return Account.all_objects.get(cooperative=coop, code="2000")
+
+
+def test_contribution_type_create_derives_the_slug(coop):
+    admin = _privileged_user(coop)
+
+    resp = _client(admin).post("/api/v1/contribution-types/", {
+        "name": "Building Fund", "frequency": "monthly", "kind": "mandatory",
+        "gl_account": _funds_account(coop).id,
+    }, format="json")
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["slug"] == "building-fund"
+
+
+def test_derived_slugs_do_not_collide_within_a_cooperative(coop):
+    """uniq_contribtype_slug_per_coop is a database constraint, so a second
+    type of the same name must get its own slug rather than a 500."""
+    admin = _privileged_user(coop)
+    client = _client(admin)
+    body = {
+        "name": "Building Fund", "frequency": "monthly", "kind": "mandatory",
+        "gl_account": _funds_account(coop).id,
+    }
+
+    first = client.post("/api/v1/contribution-types/", body, format="json")
+    second = client.post("/api/v1/contribution-types/", body, format="json")
+
+    assert first.status_code == 201, first.content
+    assert second.status_code == 201, second.content
+    assert first.json()["slug"] == "building-fund"
+    assert second.json()["slug"] == "building-fund-2"
+
+
+def test_one_off_is_a_valid_frequency(coop):
+    """The console offered "one-off"; the model's choice is "one_off", so the
+    hyphenated value the select sent was rejected outright."""
+    admin = _privileged_user(coop)
+
+    resp = _client(admin).post("/api/v1/contribution-types/", {
+        "name": "Registration Levy", "frequency": "one_off",
+        "kind": "mandatory", "gl_account": _funds_account(coop).id,
+    }, format="json")
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["frequency"] == "one_off"
+
+
+def test_an_explicit_slug_is_still_respected(coop):
+    admin = _privileged_user(coop)
+
+    resp = _client(admin).post("/api/v1/contribution-types/", {
+        "name": "Building Fund", "slug": "bf", "frequency": "monthly",
+        "kind": "mandatory", "gl_account": _funds_account(coop).id,
+    }, format="json")
+
+    assert resp.status_code == 201, resp.content
+    assert resp.json()["slug"] == "bf"
+
+
+def test_contribution_type_gl_account_can_be_changed(coop):
+    """The console's edit form now offers the GL account, so PATCHing it must
+    work. gl_account is a PROTECT FK, so this is worth pinning rather than
+    assuming the serializer allows it."""
+    from ledger.models import Account
+
+    admin = _privileged_user(coop)
+    client = _client(admin)
+    created = client.post("/api/v1/contribution-types/", {
+        "name": "Building Fund", "frequency": "monthly", "kind": "mandatory",
+        "gl_account": _funds_account(coop).id,
+    }, format="json")
+    assert created.status_code == 201, created.content
+    type_id = created.json()["id"]
+
+    other = Account.all_objects.filter(cooperative=coop).exclude(
+        pk=_funds_account(coop).pk).first()
+    assert other is not None, "the seeded chart of accounts should have more"
+
+    resp = client.patch(f"/api/v1/contribution-types/{type_id}/",
+                        {"gl_account": other.id}, format="json")
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["gl_account"] == other.id
+    assert resp.json()["gl_account_name"] == other.name
+
+
+def test_editing_a_type_without_gl_account_keeps_the_current_one(coop):
+    """The form omits the key rather than sending null (the column is not
+    nullable); a partial update must leave the account alone."""
+    admin = _privileged_user(coop)
+    client = _client(admin)
+    funds = _funds_account(coop)
+    created = client.post("/api/v1/contribution-types/", {
+        "name": "Building Fund", "frequency": "monthly", "kind": "mandatory",
+        "gl_account": funds.id,
+    }, format="json")
+    type_id = created.json()["id"]
+
+    resp = client.patch(f"/api/v1/contribution-types/{type_id}/",
+                        {"name": "Building Fund (renamed)"}, format="json")
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["gl_account"] == funds.id

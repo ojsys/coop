@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.utils.text import slugify
 from rest_framework import serializers
 
 from contributions.models import Contribution, ContributionType
@@ -9,11 +10,40 @@ class ContributionTypeSerializer(serializers.ModelSerializer):
     gl_account_name = serializers.CharField(
         source="gl_account.name", read_only=True,
     )
+    # Derived from the name when omitted. The console never collected a slug, so
+    # every create from it was refused with "This field is required" naming a
+    # field the officer could not see or fill. Still writable for clients that
+    # set it deliberately.
+    slug = serializers.SlugField(max_length=60, required=False)
 
     class Meta:
         model = ContributionType
         fields = ["id", "name", "slug", "frequency", "kind",
                   "expected_amount", "gl_account", "gl_account_name", "active"]
+
+    def validate(self, attrs):
+        if self.instance is None and not attrs.get("slug"):
+            attrs["slug"] = self._unique_slug(attrs.get("name", ""))
+        return attrs
+
+    def _unique_slug(self, name: str) -> str:
+        """A free slug for the active cooperative.
+
+        uniq_contribtype_slug_per_coop is a database constraint, so this checks
+        what is taken rather than trusting a bare slugify. The default manager is
+        tenant-scoped, which is exactly the scope of the constraint.
+        """
+        base = slugify(name)[:60] or "contribution"
+        taken = set(ContributionType.objects.values_list("slug", flat=True))
+        if base not in taken:
+            return base
+        n = 2
+        while True:
+            suffix = f"-{n}"
+            candidate = f"{base[:60 - len(suffix)]}{suffix}"
+            if candidate not in taken:
+                return candidate
+            n += 1
 
 
 class ContributionSerializer(serializers.ModelSerializer):
