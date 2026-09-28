@@ -7,6 +7,7 @@ the platform and aggregate across every cooperative — so they use plain
 """
 from __future__ import annotations
 
+from django import forms
 from django.contrib import admin, messages
 from django.db import models
 from django.utils.html import format_html
@@ -184,8 +185,42 @@ class SupportTicketAdmin(admin.ModelAdmin):
 
 
 # ── Platform profile & notification templates ───────────────────────────────
+class PlatformProfileAdminForm(forms.ModelForm):
+    """Lets an admin paste the whole Google tag, not just the ID.
+
+    The field is redeclared without ``max_length`` on purpose: generated from
+    the model it would cap input at 32 characters, and a pasted gtag snippet is
+    a few hundred — so the paste was rejected for length before
+    ``clean_ga_measurement_id`` could lift the ID out of it. Only the short ID
+    is ever stored.
+    """
+
+    ga_measurement_id = forms.CharField(
+        required=False,
+        label="Google Analytics tag",
+        widget=forms.Textarea(attrs={"rows": 3, "style": "font-family:monospace"}),
+        help_text='Paste the measurement ID ("G-XXXXXXXXXX") or the whole '
+                  "Google tag snippet — the ID is taken from it. Blank switches "
+                  "tracking off everywhere.",
+    )
+
+    class Meta:
+        model = PlatformProfile
+        fields = "__all__"
+
+    def clean_ga_measurement_id(self):
+        from platform_admin.analytics import extract_measurement_id
+
+        try:
+            return extract_measurement_id(self.cleaned_data["ga_measurement_id"])
+        except ValueError as exc:
+            raise forms.ValidationError(str(exc)) from exc
+
+
 @admin.register(PlatformProfile)
 class PlatformProfileAdmin(admin.ModelAdmin):
+    form = PlatformProfileAdminForm
+
     list_display = ("name", "support_email", "default_currency",
                     "default_timezone", "brand_color")
     readonly_fields = ("logo_preview", "favicon_preview", "created_at",
@@ -199,6 +234,16 @@ class PlatformProfileAdmin(admin.ModelAdmin):
         }),
         ("Defaults applied to new cooperatives", {
             "fields": ("default_currency", "default_timezone"),
+        }),
+        # Without this the field exists on the model and in the console but is
+        # invisible here, because fieldsets render only what they list.
+        ("Analytics", {
+            "fields": ("ga_measurement_id",),
+            "description": (
+                "Paste the GA4 measurement ID (G-XXXXXXXXXX) or the whole "
+                "Google tag snippet — the ID is taken from it. Leave blank to "
+                "switch tracking off everywhere."
+            ),
         }),
         ("Timestamps", {
             "classes": ("collapse",),

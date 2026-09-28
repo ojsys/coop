@@ -135,3 +135,141 @@ def test_cooperative_activity_returns_the_documented_shape(coop):
                 "top_contributors", "feed"):
         assert key in body, f"missing {key}"
     assert len(body["daily"]) == body["window_days"]
+
+
+# ── Pasting a Google tag ────────────────────────────────────────────────────
+# Google's setup screen gives you a <script> block, not a bare ID, so that is
+# what an admin will paste. The ID is lifted out of it rather than the HTML
+# being stored and injected into every page.
+GTAG_SNIPPET = """
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-ABC1234XYZ"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-ABC1234XYZ');
+</script>
+"""
+
+
+def test_a_bare_measurement_id_is_kept():
+    from platform_admin.analytics import extract_measurement_id
+
+    assert extract_measurement_id("G-ABC1234XYZ") == "G-ABC1234XYZ"
+    assert extract_measurement_id("  g-abc1234xyz  ") == "G-ABC1234XYZ"
+
+
+def test_the_id_is_lifted_out_of_a_pasted_snippet():
+    from platform_admin.analytics import extract_measurement_id
+
+    assert extract_measurement_id(GTAG_SNIPPET) == "G-ABC1234XYZ"
+
+
+def test_blank_stays_blank():
+    """Blank is meaningful — it switches tracking off."""
+    from platform_admin.analytics import extract_measurement_id
+
+    assert extract_measurement_id("") == ""
+    assert extract_measurement_id(None) == ""
+    assert extract_measurement_id("   ") == ""
+
+
+def test_a_tag_manager_container_is_refused_with_a_reason():
+    """GTM loads a different script; accepting it silently would mean tracking
+    that never fires."""
+    from platform_admin.analytics import extract_measurement_id
+
+    with pytest.raises(ValueError) as exc:
+        extract_measurement_id("GTM-ABC1234")
+    assert "Tag Manager" in str(exc.value)
+
+
+def test_junk_is_refused_with_a_usable_message():
+    from platform_admin.analytics import extract_measurement_id
+
+    with pytest.raises(ValueError) as exc:
+        extract_measurement_id("my analytics account")
+    assert "measurement ID" in str(exc.value)
+
+
+def test_a_pasted_snippet_normalises_through_the_serializer(db):
+    """The console PATCHes /platform/profile/ with whatever was typed, so the
+    serializer must accept a snippet far longer than the stored column."""
+    from platform_admin.models import PlatformProfile
+    from platform_admin.serializers import PlatformProfileSerializer
+
+    serializer = PlatformProfileSerializer(
+        PlatformProfile.load(), data={"ga_measurement_id": GTAG_SNIPPET},
+        partial=True,
+    )
+    assert serializer.is_valid(), serializer.errors
+    serializer.save()
+
+    assert PlatformProfile.load().ga_measurement_id == "G-ABC1234XYZ"
+    assert APIClient().get(BRANDING_URL).json()["ga_measurement_id"] == "G-ABC1234XYZ"
+
+
+def test_the_serializer_rejects_junk(db):
+    from platform_admin.models import PlatformProfile
+    from platform_admin.serializers import PlatformProfileSerializer
+
+    serializer = PlatformProfileSerializer(
+        PlatformProfile.load(), data={"ga_measurement_id": "nonsense"},
+        partial=True,
+    )
+
+    assert not serializer.is_valid()
+    assert "ga_measurement_id" in serializer.errors
+
+
+def test_the_admin_form_normalises_a_pasted_snippet(db):
+    """Through the admin's form, not full_clean().
+
+    full_clean() runs clean_fields() — and therefore max_length — *before*
+    clean(), so an over-length paste can never reach model-level normalisation.
+    That is exactly why the form redeclares the field without a length cap.
+    """
+    from platform_admin.admin import PlatformProfileAdminForm
+    from platform_admin.models import PlatformProfile
+
+    profile = PlatformProfile.load()
+    form = PlatformProfileAdminForm(
+        instance=profile,
+        data={
+            "name": profile.name,
+            "brand_color": profile.brand_color,
+            "support_email": profile.support_email,
+            "support_phone": profile.support_phone,
+            "default_currency": profile.default_currency,
+            "default_timezone": profile.default_timezone,
+            "ga_measurement_id": GTAG_SNIPPET,
+        },
+    )
+
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["ga_measurement_id"] == "G-ABC1234XYZ"
+    form.save()
+    assert PlatformProfile.load().ga_measurement_id == "G-ABC1234XYZ"
+
+
+def test_the_admin_form_refuses_a_tag_manager_container(db):
+    from platform_admin.admin import PlatformProfileAdminForm
+    from platform_admin.models import PlatformProfile
+
+    profile = PlatformProfile.load()
+    form = PlatformProfileAdminForm(
+        instance=profile,
+        data={
+            "name": profile.name,
+            "brand_color": profile.brand_color,
+            "support_email": profile.support_email,
+            "support_phone": profile.support_phone,
+            "default_currency": profile.default_currency,
+            "default_timezone": profile.default_timezone,
+            "ga_measurement_id": "GTM-ABC1234",
+        },
+    )
+
+    assert not form.is_valid()
+    assert "Tag Manager" in str(form.errors["ga_measurement_id"])

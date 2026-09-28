@@ -114,11 +114,29 @@ class ProviderStatusSerializer(serializers.ModelSerializer):
 
 
 class PlatformProfileSerializer(serializers.ModelSerializer):
+    # Declared without max_length on purpose. Inherited from the model it would
+    # be a MaxLengthValidator, and run_validators fires *before*
+    # validate_ga_measurement_id — so a pasted Google tag (a few hundred
+    # characters) was rejected for length before the ID could be lifted out of
+    # it. The stored value is still short; only the input is allowed to be long.
+    ga_measurement_id = serializers.CharField(
+        required=False, allow_blank=True, trim_whitespace=False,
+    )
+
     class Meta:
         model = PlatformProfile
         fields = ["name", "brand_color", "logo", "favicon", "support_email",
                   "support_phone", "default_currency", "default_timezone",
                   "ga_measurement_id"]
+
+    def validate_ga_measurement_id(self, value):
+        """Accept a bare ID or the whole pasted snippet; store just the ID."""
+        from platform_admin.analytics import extract_measurement_id
+
+        try:
+            return extract_measurement_id(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(str(exc)) from exc
 
 
 class NotificationTemplateSerializer(serializers.ModelSerializer):

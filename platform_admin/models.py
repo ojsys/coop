@@ -392,6 +392,23 @@ class PlatformProfile(TimeStampedModel):
     def __str__(self) -> str:
         return self.name
 
+    def clean(self):
+        """Normalise a pasted Google tag down to its measurement ID.
+
+        Covers the Django admin, whose ModelForm runs full_clean. The DRF
+        serializer validates the same way via the same helper.
+        """
+        super().clean()
+        from django.core.exceptions import ValidationError
+
+        from platform_admin.analytics import extract_measurement_id
+
+        try:
+            self.ga_measurement_id = extract_measurement_id(
+                self.ga_measurement_id)
+        except ValueError as exc:
+            raise ValidationError({"ga_measurement_id": str(exc)}) from exc
+
     @classmethod
     def load(cls) -> "PlatformProfile":
         obj, _ = cls.objects.get_or_create(pk=1)
