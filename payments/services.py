@@ -265,3 +265,54 @@ def reconciliation_summary(cooperative, *, since=None, until=None) -> dict:
         "match_accuracy": round(accuracy, 2),
         "by_status": counts,
     }
+
+
+# ── Platform subscription billing ───────────────────────────────────────────
+# These charge a *cooperative* on behalf of the platform, which is the opposite
+# direction from everything above: no subaccount is set, so settlement lands in
+# the platform's own Paystack account rather than the cooperative's.
+def initialize_invoice_payment(invoice, *, email, callback_url=None):
+    """Start a Paystack checkout for a subscription invoice.
+
+    Mints a fresh reference on every attempt and stores it on the invoice.
+    Reusing one reference across retries earns "Duplicate Transaction
+    Reference" from Paystack the moment a previous attempt succeeded, which
+    would leave an officer unable to pay a second time after a browser mishap.
+
+    Returns the checkout URL, or ``None`` when no live key is configured.
+    """
+    import secrets
+
+    reference = f"SUB-{invoice.pk}-{secrets.token_hex(6).upper()}"
+    invoice.psp_reference = reference
+    invoice.save(update_fields=["psp_reference", "updated_at"])
+
+    provider = get_provider(Provider.PAYSTACK)
+    return provider.initialize_transaction(
+        email=email,
+        amount=invoice.amount,
+        reference=reference,
+        subaccount_code=None,
+        callback_url=callback_url or (settings.PAYSTACK_CALLBACK_URL or None),
+    )
+
+
+def verify_invoice_payment(reference):
+    """Confirm a subscription payment and settle the invoice. Idempotent.
+
+    Returns the invoice (unchanged if the charge did not succeed), or ``None``
+    when the reference matches nothing — a stale or forged return URL.
+    """
+    from platform_admin.billing import settle_invoice
+    from platform_admin.models import Invoice
+
+    invoice = Invoice.objects.filter(psp_reference=reference).first()
+    if invoice is None:
+        return None
+    if invoice.status == Invoice.Status.PAID:
+        return invoice
+
+    provider = get_provider(Provider.PAYSTACK)
+    if not provider.verify_transaction(reference):
+        return invoice
+    return settle_invoice(invoice)

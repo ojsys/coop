@@ -35,6 +35,7 @@ from payments.views import (
     FlutterwaveWebhookView, PaymentEventViewSet, PaystackWebhookView,
     ProviderAccountViewSet,
 )
+from platform_admin.public_views import InvoicePayView, InvoiceVerifyView
 from platform_admin.views import (
     DomainViewSet, IncidentViewSet, InvoiceViewSet, NotificationTemplateViewSet,
     OnboardingItemViewSet, PlanViewSet, PlatformTeamViewSet,
@@ -137,6 +138,13 @@ urlpatterns = [
          name="public-apply"),
     path("public/join/", JoinRequestCreateView.as_view(),
          name="public-join"),
+    # The invoice pay link an officer follows from their inbox. `verify` is
+    # declared FIRST: <str:pay_token> would otherwise capture the literal
+    # "verify" as a token and the verification endpoint would be unreachable.
+    path("public/invoice/verify/", InvoiceVerifyView.as_view(),
+         name="public-invoice-verify"),
+    path("public/invoice/<str:pay_token>/", InvoicePayView.as_view(),
+         name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
     path("webhooks/paystack/", PaystackWebhookView.as_view(),
          name="webhook-paystack"),

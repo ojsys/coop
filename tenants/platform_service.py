@@ -21,14 +21,11 @@ from tenants.models import Cooperative
 
 ZERO = Decimal("0.00")
 
-# Indicative monthly price per plan tier (midpoints of the PRD pricing bands).
-# MRR is derived from each active cooperative's actual tier, so it moves as the
-# real tenant book changes — not a hard-coded figure.
-TIER_MRR = {
-    Cooperative.Tier.SMALL: Decimal("10000"),
-    Cooperative.Tier.MEDIUM: Decimal("35000"),
-    Cooperative.Tier.LARGE: Decimal("150000"),
-}
+# TIER_MRR lived here: a per-tier price table used to estimate MRR whenever no
+# subscriptions existed. It was described as "not a hard-coded figure" directly
+# above three hard-coded figures, and it is why a platform that had never billed
+# anyone reported ₦20,000 of monthly revenue. Revenue now comes from
+# subscriptions or it does not exist.
 
 
 def _confirmed_all(start=None, end=None):
@@ -71,13 +68,14 @@ def platform_overview() -> dict:
     coops = Cooperative.objects.all()
     active = coops.exclude(status=Cooperative.Status.CLOSED)
 
-    # Prefer real billing: sum of active subscription plan prices. Fall back to
-    # the tier-based estimate only while no subscriptions have been created yet.
+    # Real billing only. This used to fall back to a per-tier estimate when no
+    # subscriptions existed, which meant a platform with no revenue at all
+    # reported an "MRR" invented from the tier of each live cooperative —
+    # two small tenants showed ₦20,000 that nobody had ever been billed for.
+    # Zero revenue now reads as zero.
     from platform_admin.services import subscription_mrr
 
     mrr = subscription_mrr()
-    if mrr == ZERO:
-        mrr = sum((TIER_MRR.get(c.tier, ZERO) for c in active), ZERO)
 
     by_state = [
         {"state": r["state"] or "Unspecified", "count": r["c"]}

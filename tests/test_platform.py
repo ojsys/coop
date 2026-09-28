@@ -39,8 +39,11 @@ def test_overview_aggregates_across_tenants(two_coops):
     assert data["members_total"] == 2
     # Gross contributions sum confirmed postings across all tenants.
     assert data["gross_contributions"] == Decimal("5000.00")
-    # MRR is derived from each cooperative's real tier (both default Small).
-    assert data["mrr"] == Decimal("20000")
+    # Nobody has been billed, so there is no revenue. This previously asserted
+    # ₦20,000 — a per-tier estimate the old fallback invented — which is exactly
+    # the figure that appeared on the live dashboard as "Platform MRR" before a
+    # single subscription existed.
+    assert data["mrr"] == Decimal("0")
     # By-state groups the real tenant book.
     assert {r["state"]: r["count"] for r in data["by_state"]}["Lagos"] >= 1
     assert data["by_tier"]["small"] == 2
@@ -71,17 +74,50 @@ def test_overview_requires_platform_admin(two_coops):
     assert resp.data["cooperatives_live"] == 2
 
 
-def test_mrr_reflects_tier_mix(coop):
-    """MRR moves with the real tier of each cooperative."""
-    # Bump the seeded coop to Medium and add a Large tenant.
-    Cooperative.objects.filter(pk=coop.pk).update(tier=Cooperative.Tier.MEDIUM)
-    provisioned = Cooperative.objects.create(
+def test_mrr_reflects_subscriptions_not_tiers(coop):
+    """Revenue comes from what cooperatives are billed, not what size they are.
+
+    The replaced version asserted MRR moved with each cooperative's *tier*,
+    which is the defect: a tier is a size band, not a payment.
+    """
+    from platform_admin.models import Plan, Subscription
+
+    growth = Plan.objects.create(
+        name="Growth", tier=Plan.Tier.MEDIUM, price_monthly=Decimal("35000"))
+    big = Cooperative.objects.create(
         name="Institution FedCoop", slug="fed", tier=Cooperative.Tier.LARGE,
         status=Cooperative.Status.ACTIVE,
     )
-    provisioned.seed_chart_of_accounts()
+    big.seed_chart_of_accounts()
 
-    data = platform_overview()
-    # Medium (35,000) + Large (150,000) = 185,000
-    assert data["mrr"] == Decimal("185000")
-    assert data["by_tier"] == {"small": 0, "medium": 1, "large": 1}
+    # A large tenant with no subscription contributes nothing.
+    assert platform_overview()["mrr"] == Decimal("0")
+
+    Subscription.objects.create(cooperative=coop, plan=growth,
+                                status=Subscription.Status.ACTIVE)
+    assert platform_overview()["mrr"] == Decimal("35000")
+
+
+def test_trials_and_past_due_are_not_counted_as_revenue(coop, other_coop):
+    """A trial pays nothing and a past-due account has not paid.
+
+    Counting either overstates MRR exactly when it is most misleading — at the
+    start, when nearly every subscription is a trial.
+    """
+    from platform_admin.models import Plan, Subscription
+    from platform_admin.services import subscription_breakdown
+
+    starter = Plan.objects.create(
+        name="Starter", tier=Plan.Tier.SMALL, price_monthly=Decimal("10000"))
+    Subscription.objects.create(cooperative=coop, plan=starter,
+                                status=Subscription.Status.TRIAL)
+    Subscription.objects.create(cooperative=other_coop, plan=starter,
+                                status=Subscription.Status.PAST_DUE)
+
+    assert platform_overview()["mrr"] == Decimal("0")
+
+    # Not hidden, just not counted as revenue.
+    breakdown = subscription_breakdown()
+    assert breakdown["trial"]["count"] == 1
+    assert breakdown["past_due"]["count"] == 1
+    assert breakdown["past_due"]["value"] == Decimal("10000")

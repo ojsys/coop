@@ -1,0 +1,75 @@
+{% extends "emails/base.html" %}
+
+{% comment %}
+The monthly subscription invoice, and every reminder after it. One template for
+both: a reminder is the same invoice said again, and maintaining two drifting
+copies of the same figures is how an amount ends up disagreeing with itself.
+
+`is_reminder` switches the wording. `reminder_count` is how many have already
+gone out, so the tone can harden without a separate template.
+
+comment/endcomment, never the hash form: that one is single-line only and
+renders verbatim into the message if it wraps.
+{% endcomment %}
+
+{% block preheader %}{% if is_reminder %}Reminder: {{ amount }} for {{ period_label }} is still outstanding.{% else %}Your {{ period_label }} subscription invoice for {{ amount }} is ready.{% endif %}{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello,</p>
+
+  {% if is_reminder %}
+    <p style="margin:0 0 14px;">
+      We have not yet received payment for invoice
+      <strong>{{ number }}</strong> covering {{ period_label }}. Your
+      cooperative is still running normally — this is a reminder, not a
+      restriction.
+    </p>
+  {% else %}
+    <p style="margin:0 0 14px;">
+      {% if was_trial %}
+        <strong>{{ coop_name }}</strong> has finished its first month, which was
+        free. Here is your first subscription invoice.
+      {% else %}
+        Here is your subscription invoice for {{ period_label }}.
+      {% endif %}
+    </p>
+  {% endif %}
+
+  <table role="presentation" cellpadding="0" cellspacing="0"
+         style="width:100%;margin:0 0 18px;border:1px solid #e7e3da;border-radius:10px;">
+    <tr>
+      <td style="padding:12px 14px;color:#6f6b62;font-size:13px;">Invoice</td>
+      <td style="padding:12px 14px;text-align:right;font-weight:700;color:#1b1a17;">{{ number }}</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 14px;color:#6f6b62;font-size:13px;border-top:1px solid #f0ede6;">Period</td>
+      <td style="padding:12px 14px;text-align:right;color:#1b1a17;border-top:1px solid #f0ede6;">{{ period_label }}</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 14px;color:#6f6b62;font-size:13px;border-top:1px solid #f0ede6;">Plan</td>
+      <td style="padding:12px 14px;text-align:right;color:#1b1a17;border-top:1px solid #f0ede6;">{{ plan_name }}</td>
+    </tr>
+    <tr>
+      <td style="padding:12px 14px;color:#6f6b62;font-size:13px;border-top:1px solid #f0ede6;">Due</td>
+      <td style="padding:12px 14px;text-align:right;color:#1b1a17;border-top:1px solid #f0ede6;">{{ due_at }}</td>
+    </tr>
+    <tr>
+      <td style="padding:14px;font-weight:700;color:#1b1a17;border-top:1px solid #e7e3da;">Amount</td>
+      <td style="padding:14px;text-align:right;font-weight:700;font-size:18px;color:#0b4f3a;border-top:1px solid #e7e3da;">{{ amount }}</td>
+    </tr>
+  </table>
+
+  {% if suspend_warning %}
+    <p style="margin:0 0 14px;padding:12px 14px;border-radius:10px;background:#fdf6e7;color:#7a5b12;font-size:13px;">
+      If this invoice is not settled by {{ suspend_on }}, access will be
+      suspended until payment is received. Members will not be able to sign in
+      while that is the case, so please settle it or reply to this email if
+      something is wrong.
+    </p>
+  {% endif %}
+
+  <p style="margin:0 0 14px;color:#6f6b62;font-size:13px;">
+    Paying online settles the invoice immediately. If you would rather pay by
+    transfer, reply to this email and we will send account details.
+  </p>
+{% endblock %}

@@ -104,6 +104,10 @@ REST_FRAMEWORK = {
         # tight enough to stop automated stuffing, which runs orders of
         # magnitude faster than any human queue.
         'login': '30/min',
+        # The public invoice-pay link. Unauthenticated by necessity — an
+        # officer opens it from their inbox — so it is rate limited to make
+        # guessing at pay tokens pointless as well as improbable.
+        'invoice_pay': '20/hour',
     },
 }
 
@@ -132,6 +136,24 @@ PAYSTACK_USE_SUBACCOUNT = (
 FLUTTERWAVE_SECRET_HASH = os.environ.get(
     'FLUTTERWAVE_SECRET_HASH', 'flw_test_hash',
 )
+
+# --- Subscription billing ---------------------------------------------------
+# A cooperative operates free for its first month after going live, is then
+# invoiced monthly, and is reminded every few days until it pays. These are
+# settings rather than literals because they are commercial policy, not
+# mechanics — expect them to be argued about and changed.
+# Free period granted at go-live, before the first invoice is raised.
+BILLING_TRIAL_DAYS = int(os.environ.get('BILLING_TRIAL_DAYS', '30'))
+# How long a cooperative has to settle an invoice before it counts as overdue.
+BILLING_DUE_DAYS = int(os.environ.get('BILLING_DUE_DAYS', '7'))
+# Gap between payment reminders once an invoice is outstanding.
+BILLING_REMINDER_INTERVAL_DAYS = int(
+    os.environ.get('BILLING_REMINDER_INTERVAL_DAYS', '3'))
+# Days past the due date before a cooperative is suspended. Deliberately long:
+# suspending locks real members out of their own savings records, so it is a
+# last resort after roughly ten reminders, not a first response.
+BILLING_SUSPEND_AFTER_DAYS = int(
+    os.environ.get('BILLING_SUSPEND_AFTER_DAYS', '30'))
 
 # --- White-label -----------------------------------------------------------
 # CNAME target cooperatives point their custom domains at.

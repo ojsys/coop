@@ -11,11 +11,22 @@ specific cooperative carry an explicit, nullable FK to it.
 """
 from __future__ import annotations
 
+import secrets
+
 from django.conf import settings
 from django.db import models
 from django.utils import timezone
 
 from core.models import TimeStampedModel
+
+
+def make_pay_token() -> str:
+    """An unguessable handle for an invoice's public "pay now" link.
+
+    A named module-level function, not a lambda: Django serialises the
+    reference into the migration, and a lambda cannot be serialised.
+    """
+    return secrets.token_urlsafe(32)
 
 
 # ── Billing ────────────────────────────────────────────────────────────────
@@ -104,11 +115,37 @@ class Invoice(TimeStampedModel):
     due_at = models.DateField(null=True, blank=True)
     paid_at = models.DateField(null=True, blank=True)
 
+    # Paystack reference for this invoice, so a returning payer can be settled
+    # against it. Distinct from a member contribution's reference: this is the
+    # platform charging a cooperative, not a cooperative collecting from a
+    # member, and it settles to the platform's own account.
+    psp_reference = models.CharField(max_length=64, blank=True, db_index=True)
+    # Unguessable handle for the "pay now" link in the invoice email. An officer
+    # follows it from their inbox with no session, so the token *is* the
+    # authorisation — hence secrets, not a sequential id.
+    #
+    # Indexed but deliberately not unique=True: adding a unique column with a
+    # default to a table that already holds invoices makes Django write the
+    # same computed value to every existing row, which violates the constraint
+    # on the spot. Tokens are issued at creation instead, and 32 bytes from
+    # secrets makes a collision not worth engineering against. Blank means
+    # "no pay link" — the state every pre-existing invoice is in.
+    pay_token = models.CharField(max_length=64, blank=True, default="",
+                                 db_index=True, editable=False)
+    # Reminder bookkeeping, so the cycle can run daily and still only mail every
+    # BILLING_REMINDER_INTERVAL_DAYS, and so a stuck invoice is visible.
+    last_reminder_at = models.DateTimeField(null=True, blank=True)
+    reminder_count = models.PositiveIntegerField(default=0)
+
     class Meta:
         ordering = ["-issued_at", "-created_at"]
 
     def __str__(self) -> str:
         return f"{self.number} · {self.cooperative}"
+
+    @property
+    def is_settled(self) -> bool:
+        return self.status in (self.Status.PAID, self.Status.VOID)
 
 
 # ── Onboarding pipeline ─────────────────────────────────────────────────────
@@ -194,6 +231,15 @@ class OnboardingItem(TimeStampedModel):
                     action="cooperative.go_live", entity=coop,
                     before={"status": before}, after={"status": coop.status},
                 )
+
+                # Start the free trial the moment they go live. Returns None
+                # when no plan matches the tier, which is deliberately not
+                # fatal: a missing price list is our problem, and refusing to
+                # activate a cooperative over it would put it in front of
+                # their members.
+                from platform_admin.billing import ensure_subscription
+
+                ensure_subscription(coop)
 
                 # Tell the cooperative it is live. Dispatched after commit so
                 # a mail failure can never roll back an activation, and sent

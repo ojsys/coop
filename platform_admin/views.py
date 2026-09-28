@@ -68,10 +68,14 @@ class InvoiceViewSet(PlatformViewSetBase):
 
     @action(detail=True, methods=["post"], url_path="mark-paid")
     def mark_paid(self, request, pk=None):
-        invoice = self.get_object()
-        invoice.status = Invoice.Status.PAID
-        invoice.paid_at = timezone.now().date()
-        invoice.save(update_fields=["status", "paid_at", "updated_at"])
+        # Routed through settle_invoice so marking a bank transfer paid does
+        # exactly what a card payment does: rolls the billing period on, makes
+        # the subscription ACTIVE, and lifts a suspension. Setting the status
+        # here directly left the subscription untouched, so a paid cooperative
+        # stayed PAST_DUE and was re-invoiced for a period it had settled.
+        from platform_admin.billing import settle_invoice
+
+        invoice = settle_invoice(self.get_object())
         return Response(self.get_serializer(invoice).data)
 
 

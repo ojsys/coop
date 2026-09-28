@@ -254,3 +254,53 @@ def send_welcome_email(membership) -> bool:
             "timeout_hours": _timeout_hours(),
         },
     )
+
+
+def send_subscription_invoice_email(invoice, *, is_reminder: bool = False,
+                                    suspend_on=None) -> bool:
+    """Send a cooperative its subscription invoice, or a reminder for it.
+
+    One function for both so the figures can never disagree between the first
+    notice and the tenth. Returns False when there is nobody to bill — worth
+    logging, because an invoice nobody is told about will never be paid and the
+    cooperative would be suspended for silence we caused.
+    """
+    cooperative = invoice.cooperative
+    recipients = cooperative_notification_emails(cooperative)
+    if not recipients:
+        logger.warning(
+            "No contact address or privileged officer for %s — subscription "
+            "invoice %s could not be sent", cooperative, invoice.number,
+        )
+        return False
+
+    plan = invoice.subscription.plan if invoice.subscription_id else None
+    amount = f"{invoice.currency} {invoice.amount:,.2f}"
+    subject = (
+        f"Reminder: {cooperative.name} subscription {invoice.period_label}"
+        if is_reminder else
+        f"{cooperative.name} subscription invoice — {invoice.period_label}"
+    )
+
+    return send_branded_email(
+        to=recipients,
+        subject=subject,
+        template="emails/subscription_invoice.html",
+        cooperative=cooperative,
+        context={
+            "coop_name": cooperative.name,
+            "number": invoice.number,
+            "period_label": invoice.period_label or "this period",
+            "plan_name": plan.name if plan else "Subscription",
+            "amount": amount,
+            "due_at": invoice.due_at.strftime("%d %b %Y") if invoice.due_at else "on receipt",
+            "is_reminder": is_reminder,
+            "reminder_count": invoice.reminder_count,
+            "was_trial": invoice.reminder_count == 0 and not is_reminder,
+            "suspend_warning": suspend_on is not None,
+            "suspend_on": suspend_on.strftime("%d %b %Y") if suspend_on else "",
+            # The token is the authorisation, so the link exists only here.
+            "cta_url": _absolute(f"/billing/pay/{invoice.pay_token}") if invoice.pay_token else "",
+            "cta_label": "Pay this invoice",
+        },
+    )

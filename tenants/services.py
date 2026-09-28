@@ -25,3 +25,28 @@ def provision_cooperative(*, name: str, slug: str,
     coop.seed_chart_of_accounts()
     Role.seed_defaults(coop)
     return coop
+
+
+def set_cooperative_status(cooperative, new_status, *, verb: str, actor=None):
+    """Change a cooperative's lifecycle status and record why.
+
+    Extracted from the platform viewset so that an *automatic* suspension — the
+    billing cycle acting on an unpaid invoice — writes the same audit entry as
+    an admin clicking Suspend. Two code paths writing two different trails for
+    the same event is how an audit log stops being answerable.
+    """
+    from audit.services import record_action
+
+    before = cooperative.status
+    if before == new_status:
+        return cooperative
+
+    cooperative.status = new_status
+    cooperative.save(update_fields=["status", "updated_at"])
+    record_action(
+        cooperative=cooperative, actor=actor,
+        action=f"cooperative.{verb}", entity=cooperative,
+        actor_label="" if actor else "System",
+        before={"status": before}, after={"status": new_status},
+    )
+    return cooperative

@@ -98,17 +98,12 @@ class CooperativeViewSet(mixins.ListModelMixin,
 
     # ── Lifecycle ───────────────────────────────────────────────────────────
     def _set_status(self, request, new_status, verb):
-        from audit.services import record_action
+        # Delegates to the service so an admin's suspension and the billing
+        # cycle's automatic one leave identical audit entries.
+        from tenants.services import set_cooperative_status
 
-        coop = self.get_object()
-        before = coop.status
-        coop.status = new_status
-        coop.save(update_fields=["status", "updated_at"])
-        record_action(
-            cooperative=coop, actor=request.user, action=f"cooperative.{verb}",
-            entity=coop, before={"status": before},
-            after={"status": new_status},
-        )
+        coop = set_cooperative_status(
+            self.get_object(), new_status, verb=verb, actor=request.user)
         return Response(CooperativeSerializer(coop).data)
 
     @action(detail=True, methods=["post"])

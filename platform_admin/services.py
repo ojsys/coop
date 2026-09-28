@@ -90,13 +90,42 @@ def next_invoice_number() -> str:
 
 # ── Billing ─────────────────────────────────────────────────────────────────
 def subscription_mrr() -> Decimal:
-    """Real MRR: sum of the plan price of every non-canceled subscription."""
+    """Recurring revenue actually being billed: ACTIVE subscriptions only.
+
+    Previously this excluded only CANCELED, so a TRIAL — which pays nothing by
+    definition — and a PAST_DUE — which has not paid — were both reported as
+    revenue. Counting them overstates MRR precisely when it matters, at the
+    start, when most subscriptions are trials.
+
+    Trials and past-due are not hidden; subscription_breakdown() reports them
+    beside this so the shortfall is visible rather than folded into the total.
+    """
     total = (
         Subscription.objects
-        .exclude(status=Subscription.Status.CANCELED)
+        .filter(status=Subscription.Status.ACTIVE)
         .aggregate(s=Sum("plan__price_monthly"))["s"]
     )
     return total or ZERO
+
+
+def subscription_breakdown() -> dict:
+    """Where the book stands: billed, in trial, and owed but unpaid.
+
+    MRR alone cannot distinguish "no customers" from "every customer is still
+    in their free month", and those call for very different responses.
+    """
+    rows = {
+        r["status"]: {"count": r["c"], "value": r["v"] or ZERO}
+        for r in Subscription.objects.values("status").annotate(
+            c=Count("id"), v=Sum("plan__price_monthly"))
+    }
+    empty = {"count": 0, "value": ZERO}
+    return {
+        "active": rows.get(Subscription.Status.ACTIVE, empty),
+        "trial": rows.get(Subscription.Status.TRIAL, empty),
+        "past_due": rows.get(Subscription.Status.PAST_DUE, empty),
+        "canceled": rows.get(Subscription.Status.CANCELED, empty),
+    }
 
 
 def billing_summary() -> dict:
@@ -138,6 +167,12 @@ def billing_summary() -> dict:
 
     return {
         "mrr": subscription_mrr(),
+        # Beside the headline figure on purpose: MRR is ACTIVE-only, so without
+        # this a platform whose tenants are all still in their free month shows
+        # zero revenue with no indication of why. plan_tiers below counts
+        # cooperatives per plan including trials — a count, not income — and
+        # this is what stops the two being read as the same thing.
+        "subscriptions": subscription_breakdown(),
         "outstanding": outstanding,
         "overdue_amount": overdue["s"] or ZERO,
         "overdue_count": overdue["c"] or 0,
@@ -257,11 +292,21 @@ def _month_end(year, month):
 
 # ── Revenue ─────────────────────────────────────────────────────────────────
 def mrr_trend(months: int = 6) -> list:
-    """MRR at each month-end = plan price of every subscription that had started
-    by then and isn't canceled."""
+    """MRR at each month-end: ACTIVE subscriptions that had started by then.
+
+    Matches subscription_mrr(): a trial pays nothing and a past-due account has
+    not paid, so neither is revenue. Counting them here while excluding them
+    from the headline figure would leave the chart contradicting the number
+    printed above it.
+
+    Caveat worth knowing: subscription status is not versioned, so a
+    subscription that is ACTIVE today is treated as active for every month it
+    had started by. The series therefore shows today's book projected
+    backwards, not what was truly billed in each past month.
+    """
     subs = list(
         Subscription.objects
-        .exclude(status=Subscription.Status.CANCELED)
+        .filter(status=Subscription.Status.ACTIVE)
         .values("started_at", "plan__price_monthly")
     )
     series = []
@@ -279,8 +324,10 @@ def mrr_trend(months: int = 6) -> list:
 
 def revenue_by_tier() -> list:
     rows = (
+        # ACTIVE only, like subscription_mrr and mrr_trend — otherwise a tier
+        # made up entirely of trials would report revenue nobody is paying.
         Subscription.objects
-        .exclude(status=Subscription.Status.CANCELED)
+        .filter(status=Subscription.Status.ACTIVE)
         .values("plan__tier")
         .annotate(coops=Count("id"), revenue=Sum("plan__price_monthly"))
         .order_by("plan__price_monthly")
@@ -293,9 +340,15 @@ def revenue_by_tier() -> list:
 
 
 def arpu() -> Decimal:
+    """Average revenue per paying cooperative.
+
+    Numerator and denominator must describe the same population. Once
+    subscription_mrr() became ACTIVE-only, counting trials and past-due here
+    divided real revenue by a larger book and understated the figure.
+    """
     mrr = subscription_mrr()
     n = (Subscription.objects
-         .exclude(status=Subscription.Status.CANCELED).count())
+         .filter(status=Subscription.Status.ACTIVE).count())
     return round(mrr / n, 2) if n else ZERO
 
 

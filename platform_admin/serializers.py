@@ -50,10 +50,15 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Invoice
+        # pay_token is deliberately absent: it authorises payment for anyone
+        # holding it, so it belongs in the emailed link and nowhere else.
         fields = ["id", "cooperative", "cooperative_name", "subscription",
                   "number", "period_label", "amount", "currency", "status",
                   "status_display", "issued_at", "due_at", "paid_at",
+                  "psp_reference", "last_reminder_at", "reminder_count",
                   "created_at"]
+        read_only_fields = ["psp_reference", "last_reminder_at",
+                            "reminder_count"]
 
 
 class OnboardingItemSerializer(serializers.ModelSerializer):
