@@ -62,6 +62,10 @@ class PublicBrandingView(PublicView):
             "favicon": profile.favicon.url if profile.favicon else None,
             "support_email": profile.support_email,
             "support_phone": profile.support_phone,
+            # Public by necessity: the browser needs it to load gtag.js, and a
+            # GA4 measurement ID is not a secret — it ships in the page source
+            # of every site that uses it. Empty string means "no tracking".
+            "ga_measurement_id": profile.ga_measurement_id,
         })
 
 

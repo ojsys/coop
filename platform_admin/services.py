@@ -728,3 +728,107 @@ def health() -> dict:
          "foot": "non-operational"},
     ]
     return {"providers": providers, "system": system}
+
+
+# ── Site activity (first-party) ─────────────────────────────────────────────
+def site_activity(days: int = 30) -> dict:
+    """What has actually happened across the platform in the last N days.
+
+    Volume metrics are counted from the domain tables, not from the audit log:
+    audit ``action`` strings are half free-text with references and titles
+    interpolated into them, so grouping by ``action`` produces roughly one
+    bucket per row. The audit log is used for what it is reliable at — a
+    chronological feed, a per-entity breakdown, and an events-per-day rate.
+
+    Reuses growth_trend/activation_funnel/payment_monitor rather than
+    recomputing them, so this page cannot disagree with B2B Analytics about the
+    same number.
+    """
+    from audit.models import AuditLog
+    from accounts.join_models import JoinRequest
+    from platform_admin.models import OnboardingItem
+
+    now = timezone.now()
+    start = now - timedelta(days=days)
+
+    audit = AuditLog.all_objects.filter(created_at__gte=start)
+    contributions = Contribution.all_objects.filter(created_at__gte=start)
+    confirmed = contributions.filter(status=Contribution.Status.CONFIRMED)
+    join_requests = JoinRequest.all_objects.filter(created_at__gte=start)
+
+    # Daily series. Mirrors payment_monitor's day loop so the two agree on what
+    # "a day" means rather than drifting apart at boundaries.
+    daily = []
+    for i in range(days):
+        day_start = (start + timedelta(days=i + 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        daily.append({
+            "day": day_start.strftime("%d %b"),
+            "events": audit.filter(created_at__gte=day_start,
+                                   created_at__lt=day_end).count(),
+            "contributions": contributions.filter(
+                created_at__gte=day_start, created_at__lt=day_end).count(),
+            "members": Membership.all_objects.filter(
+                created_at__gte=day_start, created_at__lt=day_end).count(),
+        })
+
+    by_entity = [
+        {"entity": r["entity_type"] or "Other", "count": r["c"]}
+        for r in audit.values("entity_type").annotate(c=Count("id"))
+                      .order_by("-c")[:8]
+    ]
+
+    # Busiest cooperatives by recorded activity in the window.
+    busiest = [
+        {"cooperative": r["cooperative__name"] or "Platform",
+         "count": r["c"]}
+        for r in audit.values("cooperative__name").annotate(c=Count("id"))
+                      .order_by("-c")[:8]
+    ]
+
+    feed = [
+        {
+            "id": r.id,
+            "action": r.action,
+            "actor": r.actor_label or (
+                r.actor.full_name if r.actor_id else "system"),
+            "cooperative": (r.cooperative.name if r.cooperative_id else None),
+            "entity": r.entity_repr,
+            "entity_type": r.entity_type,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in audit.select_related("cooperative", "actor")
+        .order_by("-created_at")[:40]
+    ]
+
+    return {
+        "window_days": days,
+        "totals": {
+            "audit_events": audit.count(),
+            "new_cooperatives": Cooperative.objects.filter(
+                created_at__gte=start).count(),
+            "new_members": Membership.all_objects.filter(
+                created_at__gte=start).count(),
+            "onboarding_started": OnboardingItem.objects.filter(
+                created_at__gte=start).count(),
+            "contributions": contributions.count(),
+            "contributions_value": str(
+                confirmed.aggregate(t=Sum("amount"))["t"] or ZERO),
+            "join_requests": join_requests.count(),
+            "join_requests_pending": join_requests.filter(
+                status=JoinRequest.Status.PENDING).count(),
+            "join_requests_approved": join_requests.filter(
+                status=JoinRequest.Status.APPROVED).count(),
+            "announcements": Announcement.all_objects.filter(
+                created_at__gte=start).count(),
+        },
+        "daily": daily,
+        "by_entity": by_entity,
+        "busiest_cooperatives": busiest,
+        "feed": feed,
+        # Reused so the numbers match the B2B Analytics page exactly.
+        "growth_trend": growth_trend(6),
+        "activation_funnel": activation_funnel(),
+        "payments": payment_monitor(min(days, 30)),
+    }

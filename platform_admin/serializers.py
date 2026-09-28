@@ -117,7 +117,8 @@ class PlatformProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = PlatformProfile
         fields = ["name", "brand_color", "logo", "favicon", "support_email",
-                  "support_phone", "default_currency", "default_timezone"]
+                  "support_phone", "default_currency", "default_timezone",
+                  "ga_measurement_id"]
 
 
 class NotificationTemplateSerializer(serializers.ModelSerializer):

@@ -6,6 +6,7 @@ numbers always reconcile with the immutable ledger.
 from __future__ import annotations
 
 import calendar
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db.models import Count, Sum
@@ -195,4 +196,101 @@ def send_arrears_reminders(cooperative, *, year=None, month=None):
         "reached": reached,
         "members_in_arrears": report["members_in_arrears"],
         "total_outstanding": report["total_outstanding"],
+    }
+
+
+# ── Activity (the console's Activity page) ──────────────────────────────────
+def cooperative_activity(coop, days: int = 30) -> dict:
+    """Recent activity inside one cooperative.
+
+    The tenant-scoped counterpart of platform_admin.services.site_activity, and
+    counted the same way: volumes come from the domain tables because audit
+    ``action`` strings are half free-text with references interpolated into
+    them, so grouping by ``action`` would yield one bucket per row. The audit
+    log supplies the chronological feed and the per-entity breakdown.
+    """
+    from accounts.join_models import JoinRequest
+    from audit.models import AuditLog
+    from communications.models import Announcement
+
+    now = timezone.now()
+    start = now - timedelta(days=days)
+
+    audit = AuditLog.all_objects.filter(cooperative=coop,
+                                        created_at__gte=start)
+    contributions = Contribution.all_objects.filter(cooperative=coop,
+                                                    created_at__gte=start)
+    confirmed = contributions.filter(status=Contribution.Status.CONFIRMED)
+    join_requests = JoinRequest.all_objects.filter(cooperative=coop,
+                                                   created_at__gte=start)
+
+    daily = []
+    for i in range(days):
+        day_start = (start + timedelta(days=i + 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        day_contribs = contributions.filter(created_at__gte=day_start,
+                                            created_at__lt=day_end)
+        daily.append({
+            "day": day_start.strftime("%d %b"),
+            "events": audit.filter(created_at__gte=day_start,
+                                   created_at__lt=day_end).count(),
+            "contributions": day_contribs.count(),
+            # A float, not a string: this feeds a chart, and Recharts needs a
+            # number to plot (the display totals below stay strings).
+            "value": float(day_contribs.filter(
+                status=Contribution.Status.CONFIRMED,
+            ).aggregate(t=Sum("amount"))["t"] or ZERO),
+        })
+
+    by_entity = [
+        {"entity": r["entity_type"] or "Other", "count": r["c"]}
+        for r in audit.values("entity_type").annotate(c=Count("id"))
+                      .order_by("-c")[:8]
+    ]
+
+    top_contributors = [
+        {
+            "member_no": r["membership__member_no"],
+            "name": r["membership__user__full_name"],
+            "count": r["c"],
+            "total": str(r["t"] or ZERO),
+        }
+        for r in confirmed.values(
+            "membership__member_no", "membership__user__full_name",
+        ).annotate(c=Count("id"), t=Sum("amount")).order_by("-t")[:8]
+    ]
+
+    feed = [
+        {
+            "id": r.id,
+            "action": r.action,
+            "actor": r.actor_label or (
+                r.actor.full_name if r.actor_id else "system"),
+            "entity": r.entity_repr,
+            "entity_type": r.entity_type,
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in audit.select_related("actor").order_by("-created_at")[:40]
+    ]
+
+    return {
+        "window_days": days,
+        "totals": {
+            "audit_events": audit.count(),
+            "new_members": Membership.all_objects.filter(
+                cooperative=coop, created_at__gte=start).count(),
+            "contributions": contributions.count(),
+            "contributions_value": str(
+                confirmed.aggregate(t=Sum("amount"))["t"] or ZERO),
+            "join_requests": join_requests.count(),
+            "join_requests_pending": join_requests.filter(
+                status=JoinRequest.Status.PENDING).count(),
+            "announcements": Announcement.all_objects.filter(
+                cooperative=coop, created_at__gte=start).count(),
+        },
+        "daily": daily,
+        "by_entity": by_entity,
+        "top_contributors": top_contributors,
+        "feed": feed,
     }

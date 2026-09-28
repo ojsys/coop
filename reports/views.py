@@ -31,6 +31,17 @@ class ReportsViewSet(TenantScopedViewMixin, viewsets.ViewSet):
             get_current_cooperative(), year=year, month=month,
         ))
 
+    @action(detail=False, methods=["get"])
+    def activity(self, request):
+        """Recent activity in the active cooperative, for the Activity page."""
+        try:
+            days = min(max(int(request.query_params.get("days", 30)), 7), 90)
+        except (TypeError, ValueError):
+            days = 30
+        return Response(services.cooperative_activity(
+            get_current_cooperative(), days=days,
+        ))
+
     @action(detail=False, methods=["get"], url_path="contribution-summary")
     def contribution_summary(self, request):
         from django.utils import timezone

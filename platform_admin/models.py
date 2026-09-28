@@ -379,6 +379,15 @@ class PlatformProfile(TimeStampedModel):
     default_currency = models.CharField(max_length=3,
                                         default=settings.DEFAULT_CURRENCY)
     default_timezone = models.CharField(max_length=40, default="Africa/Lagos")
+    # Editable by any platform admin under Platform Settings → Branding, and
+    # served through /public/branding/ so the public site can pick it up without
+    # a rebuild. Blank is meaningful: no tracking script is loaded at all.
+    ga_measurement_id = models.CharField(
+        max_length=32, blank=True,
+        verbose_name="Google Analytics measurement ID",
+        help_text='GA4 measurement ID, e.g. "G-XXXXXXXXXX". Leave blank to '
+                  'switch tracking off entirely.',
+    )
 
     def __str__(self) -> str:
         return self.name

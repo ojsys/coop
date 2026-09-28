@@ -245,6 +245,17 @@ class PlatformViewSet(viewsets.ViewSet):
             writer.writerow(row)
         return response
 
+    @action(detail=False, methods=["get"], url_path="site-activity")
+    def site_activity(self, request):
+        """First-party activity across the platform, for /analytics."""
+        from platform_admin.services import site_activity
+
+        try:
+            days = min(max(int(request.query_params.get("days", 30)), 7), 90)
+        except (TypeError, ValueError):
+            days = 30
+        return Response(site_activity(days))
+
     @action(detail=False, methods=["get"])
     def billing(self, request):
         from platform_admin.services import billing_summary
