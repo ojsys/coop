@@ -108,11 +108,23 @@ class LoanSerializer(serializers.ModelSerializer):
         read_only_fields = ["status", "interest_rate", "disbursed_at"]
 
     def get_member_photo(self, obj):
+        """A signed, expiring URL for the member's photograph.
+
+        ``member_photos/`` is a private prefix, and this serializer exposes the
+        photograph through its own method field — so it needs the same gating as
+        accounts/serializers.py. Patching only that file would have left a
+        member's photograph publicly readable through /loans/, which is the kind
+        of gap a prefix-wide rule is supposed to prevent.
+        """
+        from core.media import signed_media_url
+
         photo = getattr(obj.membership, "photo", None)
         if not photo:
             return None
+        url = signed_media_url(photo)
+        if not url:
+            return None
         request = self.context.get("request")
-        url = photo.url
         return request.build_absolute_uri(url) if request else url
 
     def get_coop_bank(self, obj):

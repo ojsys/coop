@@ -104,6 +104,27 @@ class MembershipSerializer(serializers.ModelSerializer):
                   "next_of_kin_name", "next_of_kin_phone", "bank_name",
                   "bank_account_no", "document_count"]
 
+    def to_representation(self, instance):
+        """Hand out a signed, expiring URL for the member's photograph.
+
+        ``photo`` stays *writable* so multipart upload keeps working — only the
+        output is rewritten. Every client reads whatever string the API returns
+        (``<img src={p.photo}>`` in the member app and console, ``NetworkImage``
+        in the Flutter app), so this needs no client change.
+
+        MemberSelfSerializer subclasses this, so /me/profile/ is covered too.
+
+        The request is passed through so the URL stays absolute, matching what
+        DRF's own FileField returned before — the Flutter client loads this via
+        NetworkImage and cannot resolve a relative path.
+        """
+        from core.media import sign_private_urls
+
+        return sign_private_urls(
+            super().to_representation(instance), "photo",
+            request=self.context.get("request"),
+        )
+
     def create(self, validated_data):
         user_data = validated_data.pop("user")
         user, _ = User.objects.get_or_create(
@@ -180,3 +201,18 @@ class MemberDocumentSerializer(serializers.ModelSerializer):
         model = MemberDocument
         fields = ["id", "membership", "doc_type", "doc_type_display", "label",
                   "file", "created_at"]
+
+    def to_representation(self, instance):
+        """Signed URL for the document, which is KYC material.
+
+        As with the photograph, ``file`` remains writable for upload and only
+        the representation changes — the console and member app both render
+        ``<a href={d.file}>`` and keep working unmodified. The request keeps the
+        URL absolute, as DRF's FileField had it.
+        """
+        from core.media import sign_private_urls
+
+        return sign_private_urls(
+            super().to_representation(instance), "file",
+            request=self.context.get("request"),
+        )

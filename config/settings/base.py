@@ -243,6 +243,22 @@ STATIC_URL = 'static/'
 MEDIA_URL = 'media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# Media prefixes that must NOT be publicly readable. Everything else under
+# /media/ stays open, because it is meant to be: cooperative logos and
+# favicons, platform branding, site-content photographs and the uploaded APK
+# all appear on the marketing site to anonymous visitors.
+#
+# These two hold NDPA-regulated personal data — a member's photograph and their
+# KYC documents (means of ID, proof of address, membership form). They are
+# served only through a signed, expiring URL minted by core.media, or to a
+# staff admin session. See core/media.py for the design and its trade-off.
+PRIVATE_MEDIA_PREFIXES = ('member_photos/', 'member_documents/')
+
+# How long a signed media URL stays valid. Long enough that a page left open or
+# a document opened in a new tab still works; short enough that a forwarded
+# link stops resolving. The URL is the authorisation for this window.
+PRIVATE_MEDIA_TTL = int(os.environ.get('PRIVATE_MEDIA_TTL', '3600'))
+
 # The Vite build of the React app. Django serves this shell for non-API routes
 # on single-origin deployments (see core/views_web.spa_index).
 #
