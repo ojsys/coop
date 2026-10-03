@@ -304,3 +304,42 @@ def send_subscription_invoice_email(invoice, *, is_reminder: bool = False,
             "cta_label": "Pay this invoice",
         },
     )
+
+
+def send_join_request_received_email(join_request) -> bool:
+    """Acknowledge a membership request to the person who made it.
+
+    Previously only the cooperative's officers were told, so an applicant had
+    nothing but a web page that vanished when they closed the tab — and no way
+    to tell a submitted request from a lost one.
+
+    Addressed to a stranger, so it says nothing about the cooperative beyond
+    the name they typed themselves, and is careful not to imply an account
+    exists: none is created until an officer approves.
+    """
+    cooperative = join_request.cooperative
+    message = (
+        f"Thank you — your request to join {cooperative.name} has been "
+        f"received.\n\n"
+        f"What happens next:\n\n"
+        f"1. An officer of the cooperative checks your details against their "
+        f"member register.\n"
+        f"2. If they admit you, we email you a link to choose your own "
+        f"password.\n"
+        f"3. You can sign in once you have set it.\n\n"
+        f"No account exists for you yet, and you will never be sent a "
+        f"password — only a link to choose one. If you did not make this "
+        f"request, you can ignore this message: nothing has been created.\n\n"
+        f"If you hear nothing, contact an officer of the cooperative "
+        f"directly — they decide every request themselves."
+    )
+    return send_branded_email(
+        to=join_request.email,
+        subject=f"Your request to join {cooperative.name}",
+        template="emails/notice.html",
+        cooperative=cooperative,
+        context={
+            "full_name": join_request.full_name,
+            "message": message,
+        },
+    )

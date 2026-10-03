@@ -37,15 +37,15 @@ def _unique_slug(name: str) -> str:
     return slug
 
 
-def _officer_emails(cooperative) -> list[str]:
-    """Addresses of the society's privileged officers."""
-    officers = (
-        Membership.all_objects
-        .filter(cooperative=cooperative, status=Membership.Status.ACTIVE)
-        .select_related("user", "role")
-    )
-    return [m.user.email for m in officers
-            if m.role and m.role.is_privileged and m.user.email]
+# Recipients for a join notice are deliberately the same set as any other mail
+# addressed to a cooperative: communications.cooperative_notification_emails —
+# its published contact address plus every privileged officer.
+#
+# Privileged-only on purpose. JoinRequestViewSet is gated by IsPrivilegedMember,
+# so a Chairperson cannot view or decide a request; mailing them "review it in
+# the console" would send them to a permission wall. The contact address is what
+# stops a request going unseen when a cooperative has no privileged officer,
+# which was the actual hole — not the narrowness of the role check.
 
 
 class LastOfficerError(Exception):
@@ -346,12 +346,22 @@ def request_to_join(*, cooperative, full_name, email, phone="", message=""):
 
 
 def _notify_join_request(request):
-    from communications.email import send_alert_email
+    from communications.email import (
+        cooperative_notification_emails, send_alert_email,
+        send_join_request_received_email,
+    )
 
-    recipients = _officer_emails(request.cooperative)
+    # The applicant is told first, and unconditionally. They are the one person
+    # guaranteed to be waiting, and sending this after the early return below
+    # would leave exactly the people most likely to be stranded — applicants to
+    # a cooperative with nobody to notify — hearing nothing at all.
+    send_join_request_received_email(request)
+
+    recipients = cooperative_notification_emails(request.cooperative)
     if not recipients:
         logger.warning(
-            "Join request %s for %s has no privileged officer to notify",
+            "Join request %s for %s has nobody to notify: no privileged "
+            "officer and no contact address on the cooperative",
             request.pk, request.cooperative,
         )
         return
