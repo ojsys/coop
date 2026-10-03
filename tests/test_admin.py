@@ -46,7 +46,7 @@ from platform_admin.models import (Domain, Incident, Invoice,
                                    SiteStep, SiteTrustBadge, Subscription,
                                    SupportTicket)
 from savings.models import SavingsGoal, SavingsProduct
-from tenants.models import Cooperative
+from tenants.models import BankDetailChange, Cooperative
 
 # Apps whose models the admin is expected to cover.
 PROJECT_APPS = {
@@ -165,6 +165,18 @@ def dataset(coop, member, dues_type, member_funds):
         JoinRequest.objects.create(
             full_name="Tunde Bello", email="tunde@example.com",
             phone="08031111111", message="I was introduced by my cousin.",
+        )
+        # Left unapplied on purpose: a pending proposal is the state the
+        # read-only admin screen exists to show, and the one a reviewer would
+        # actually open.
+        BankDetailChange.objects.create(
+            bank_name="Access Bank",
+            bank_account_name="Ìmọ̀lè MCS",
+            bank_account_no="0123456789",
+            previous_bank_name=coop.bank_name,
+            previous_bank_account_name=coop.bank_account_name,
+            previous_bank_account_no=coop.bank_account_no,
+            requested_by=member.user,
         )
 
     PaymentEvent.all_objects.create(

@@ -1,15 +1,49 @@
 from __future__ import annotations
 
-from rest_framework import mixins, viewsets
+from rest_framework import mixins, permissions, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from django.conf import settings
 
 from approvals.models import ApprovalRequest
 from approvals.serializers import ApprovalRequestSerializer
 from approvals.services import ApprovalError, decide_request, submit_request
 from core.context import get_current_cooperative
+from core.tenancy import resolve_cooperative
 from core.views import TenantScopedViewMixin
+
+
+class IsPrivilegedMember(permissions.BasePermission):
+    """A platform admin, or a privileged officer of the active cooperative.
+
+    This viewset was IsAuthenticated alone, which meant *any* member of a
+    cooperative could approve a loan disbursement or a dividend posting — so
+    maker-checker was enforced against the submitter only, and anyone else at
+    all counted as the checker.
+
+    Resolves the tenant itself: TenantScopedViewMixin binds it in initial(),
+    which runs *after* permission checks (mirrors accounts.views.CanManageRoles).
+    """
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if user.is_platform_admin:
+            return True
+
+        from accounts.models import Membership
+
+        cooperative = resolve_cooperative(
+            user, request.META.get(settings.TENANT_HEADER))
+        if cooperative is None:
+            return False
+        return any(
+            m.role and m.role.is_privileged
+            for m in Membership.all_objects.filter(
+                user=user, cooperative=cooperative).select_related("role")
+        )
 
 
 class ApprovalRequestViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
@@ -19,7 +53,10 @@ class ApprovalRequestViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
     officer approves or rejects it."""
 
     serializer_class = ApprovalRequestSerializer
-    permission_classes = [IsAuthenticated]
+    # Privileged officers only. With IsAuthenticated any member of the
+    # cooperative counted as a valid checker, so dual control was enforced
+    # against the submitter and nobody else.
+    permission_classes = [IsPrivilegedMember]
 
     def get_queryset(self):
         qs = ApprovalRequest.objects.select_related("requested_by",

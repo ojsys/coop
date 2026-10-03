@@ -132,17 +132,61 @@ def verify_payment(cooperative, reference):
 
     provider = get_provider(Provider.PAYSTACK)
     if provider.verify_transaction(reference):
-        return confirm_contribution(contribution)
+        settled = confirm_contribution(contribution)
+        # Recorded here rather than inside confirm_contribution: reconcile_event
+        # calls that too, and hooking it there would make the webhook path
+        # create a second event for the settlement it is already reconciling.
+        record_internal_settlement(
+            settled,
+            note="Confirmed on return from the payment provider "
+                 "(no webhook received).",
+        )
+        return settled
     return contribution
 
 
 def _resolve_cooperative(event: NormalizedEvent):
-    if not event.subaccount_code:
-        return None
-    account = ProviderAccount.all_objects.filter(
-        provider=event.provider, subaccount_code=event.subaccount_code,
-    ).select_related("cooperative").first()
-    return account.cooperative if account else None
+    """Which cooperative an inbound settlement belongs to.
+
+    The subaccount code is authoritative when split settlement is on — but
+    PAYSTACK_USE_SUBACCOUNT is off by default, so no subaccount was ever sent,
+    every webhook failed to resolve, and every event was stored with
+    cooperative=NULL. Tenant-scoped reconciliation then showed nothing, for
+    every cooperative, however much money had moved.
+
+    The reference is the second signal, and a sound one: we generated it when
+    the payment was initiated and stored it on the record it belongs to, and
+    the payload's signature has already been verified by the time this runs. So
+    a reference we issued identifies the tenant that issued it.
+    """
+    from contributions.models import Contribution
+    from loans.models import LoanRepayment
+
+    if event.subaccount_code:
+        account = ProviderAccount.all_objects.filter(
+            provider=event.provider, subaccount_code=event.subaccount_code,
+        ).select_related("cooperative").first()
+        if account is not None:
+            return account.cooperative
+
+    if event.reference:
+        contribution = (
+            Contribution.all_objects
+            .filter(psp_reference=event.reference)
+            .select_related("cooperative").first()
+        )
+        if contribution is not None:
+            return contribution.cooperative
+
+        repayment = (
+            LoanRepayment.all_objects
+            .filter(psp_reference=event.reference)
+            .select_related("cooperative").first()
+        )
+        if repayment is not None:
+            return repayment.cooperative
+
+    return None
 
 
 @transaction.atomic
@@ -178,7 +222,10 @@ def ingest_webhook(*, provider_name: str, raw_body: bytes, headers) -> PaymentEv
 
     if cooperative is None:
         payment.status = PaymentEvent.Status.UNMATCHED
-        payment.note = "Unknown subaccount — cannot route to a cooperative."
+        payment.note = (
+            "Could not route to a cooperative: no known subaccount, and the "
+            "reference matches no contribution or loan repayment."
+        )
         payment.save()
         return payment
 
@@ -316,3 +363,72 @@ def verify_invoice_payment(reference):
     if not provider.verify_transaction(reference):
         return invoice
     return settle_invoice(invoice)
+
+
+# ── Settlements that never came through a webhook ───────────────────────────
+# Reconciliation counts PaymentEvent rows and nothing else. Three paths settle
+# money without producing one, which is why the screen was blank while the
+# ledger and the contribution list were both right:
+#
+#   * verify_payment  — a card payment confirmed via the browser return URL
+#   * record_contribution — cash or a bank transfer entered by an officer
+#   * any historical contribution confirmed before this existed (see the
+#     backfill_payment_events command)
+#
+# These are recorded as Provider.INTERNAL so they are never mistaken for a
+# genuine PSP settlement, and carry a deterministic event_id derived from the
+# contribution so re-running anything cannot duplicate a row.
+def internal_event_id(contribution) -> str:
+    """A stable event id for a settlement with no provider event of its own."""
+    return f"ctb-{contribution.pk}"
+
+
+def record_internal_settlement(contribution, *, note: str = "",
+                               reconstructed: bool = False) -> PaymentEvent:
+    """Record a settlement that arrived without a PSP webhook. Idempotent.
+
+    Returns the existing row when one is already present, so a retried callback
+    or a re-run backfill is harmless. Always MATCHED: the contribution it
+    settles is the one it was created from, so there is nothing to search for
+    and nothing that can fail to match.
+    """
+    event_id = internal_event_id(contribution)
+    existing = PaymentEvent.all_objects.filter(
+        provider=Provider.INTERNAL, event_id=event_id,
+    ).first()
+    if existing is not None:
+        return existing
+
+    # Cash and transfers have no psp_reference, so fall back to the ledger
+    # journal's reference — which is what an officer would actually trace this
+    # settlement by. `journal` is nullable, hence the final fallback rather than
+    # an attribute access that would raise on the very path this exists to fix.
+    reference = contribution.psp_reference
+    if not reference and contribution.journal_id:
+        reference = contribution.journal.reference
+    if not reference:
+        reference = event_id
+
+    if not note:
+        note = (
+            "Reconstructed from the contribution record."
+            if reconstructed
+            else f"Settled by {contribution.get_channel_display().lower()}."
+        )
+
+    return PaymentEvent.all_objects.create(
+        cooperative=contribution.cooperative,
+        provider=Provider.INTERNAL,
+        event_id=event_id,
+        reference=reference,
+        amount=contribution.amount,
+        currency=contribution.cooperative.base_currency,
+        status=PaymentEvent.Status.MATCHED,
+        matched_contribution=contribution,
+        note=note,
+        payload={
+            "source": "internal",
+            "channel": contribution.channel,
+            "reconstructed": reconstructed,
+        },
+    )

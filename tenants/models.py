@@ -9,7 +9,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
-from core.models import TimeStampedModel
+from core.models import TenantScopedModel, TimeStampedModel
 
 
 class Cooperative(TimeStampedModel):
@@ -110,3 +110,56 @@ class Cooperative(TimeStampedModel):
                 code=code,
                 defaults={"name": acc_name, "kind": kind, "system": True},
             )
+
+
+class BankDetailChange(TenantScopedModel, TimeStampedModel):
+    """A proposed change to where a cooperative's money settles.
+
+    Held here rather than written straight onto the Cooperative because a bank
+    account is the one field where a single compromised or mistaken officer can
+    redirect every future payment. It is applied only once a *different*
+    privileged officer approves the matching ApprovalRequest.
+
+    ApprovalRequest can carry only an object_id and a text summary, so the
+    proposed values need a home of their own; this is it. The previous values
+    are recorded too, so the approver sees what is being replaced and the audit
+    trail survives the change.
+    """
+
+    bank_name = models.CharField(max_length=120, blank=True)
+    bank_account_name = models.CharField(max_length=200, blank=True)
+    bank_account_no = models.CharField(max_length=20, blank=True)
+
+    # What it would replace, captured when the change is proposed.
+    previous_bank_name = models.CharField(max_length=120, blank=True)
+    previous_bank_account_name = models.CharField(max_length=200, blank=True)
+    previous_bank_account_no = models.CharField(max_length=20, blank=True)
+
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="proposed_bank_changes",
+    )
+    # Set when an approver applies it; a row with no applied_at was never used.
+    applied_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return (f"{self.cooperative} → {self.bank_name} "
+                f"{self.bank_account_no}")
+
+    @property
+    def is_applied(self) -> bool:
+        return self.applied_at is not None
+
+    def describe(self) -> str:
+        """Old → new, for the approver who has to judge it."""
+        before = " / ".join(filter(None, [
+            self.previous_bank_name, self.previous_bank_account_no,
+            self.previous_bank_account_name,
+        ])) or "not set"
+        after = " / ".join(filter(None, [
+            self.bank_name, self.bank_account_no, self.bank_account_name,
+        ])) or "not set"
+        return f"Collection account: {before} → {after}"

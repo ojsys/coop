@@ -29,6 +29,19 @@ def _resolve(cooperative, action, object_id):
         if dec is None:
             raise ApprovalError("Dividend declaration not found.")
         return dec, f"Dividend {dec.period_label} · {dec.total_amount}"
+    if action == ApprovalRequest.Action.COOP_BANK_UPDATE:
+        from tenants.models import BankDetailChange
+
+        change = BankDetailChange.all_objects.filter(
+            cooperative=cooperative, id=object_id).first()
+        if change is None:
+            raise ApprovalError("Proposed bank details not found.")
+        if change.is_applied:
+            raise ApprovalError("Those bank details have already been applied.")
+        # The summary is the only description the Approvals page shows, so the
+        # actual old and new values go in it. Approving a change you cannot see
+        # is worse than having no control at all.
+        return change, change.describe()
     raise ApprovalError("Unknown action.")
 
 
@@ -102,3 +115,6 @@ def _execute(request_obj, actor):
     elif request_obj.action == ApprovalRequest.Action.DIVIDEND_POST:
         from dividends.services import post_dividend
         post_dividend(target, actor=actor)
+    elif request_obj.action == ApprovalRequest.Action.COOP_BANK_UPDATE:
+        from tenants.services import apply_bank_detail_change
+        apply_bank_detail_change(target, actor=actor)

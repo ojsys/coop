@@ -69,7 +69,42 @@ class CooperativeViewSet(mixins.ListModelMixin,
             return [IsCoopAdminOrPlatform()]
         if self.action in self._PLATFORM_ACTIONS:
             return [IsPlatformAdmin()]
+        if self.action == "propose_bank_details":
+            return [IsCoopAdminOrPlatform()]
         return super().get_permissions()
+
+    @action(detail=True, methods=["post"], url_path="propose-bank-details")
+    def propose_bank_details(self, request, pk=None):
+        """Propose new collection-account details for a second officer to vet.
+
+        Separate from the profile PATCH because these fields are not writable
+        there: a change here takes effect only once a *different* privileged
+        officer approves it.
+        """
+        from tenants.services import (
+            BankDetailError, propose_bank_detail_change,
+        )
+
+        coop = self.get_object()
+        try:
+            change, approval = propose_bank_detail_change(
+                coop,
+                actor=request.user,
+                bank_name=request.data.get("bank_name", ""),
+                bank_account_name=request.data.get("bank_account_name", ""),
+                bank_account_no=request.data.get("bank_account_no", ""),
+                note=request.data.get("note", ""),
+            )
+        except BankDetailError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+        return Response({
+            "detail": "Sent for approval. Another officer must approve it "
+                      "before the account changes.",
+            "change_id": change.pk,
+            "approval_id": approval.pk,
+            "summary": change.describe(),
+        }, status=201)
 
     def get_queryset(self):
         from accounts.models import Membership

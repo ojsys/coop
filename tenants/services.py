@@ -50,3 +50,103 @@ def set_cooperative_status(cooperative, new_status, *, verb: str, actor=None):
         before={"status": before}, after={"status": new_status},
     )
     return cooperative
+
+
+# ── Collection account: proposed by one officer, applied by another ──────────
+# The bank account is the one field where a single mistaken or compromised
+# officer can redirect every future payment, so it is the one field that does
+# not take effect when saved. It is proposed here and written only by
+# approvals._execute once a *different* privileged officer approves.
+class BankDetailError(Exception):
+    """A proposed change to the collection account was refused."""
+
+
+def propose_bank_detail_change(cooperative, *, actor, bank_name="",
+                               bank_account_name="", bank_account_no="",
+                               note=""):
+    """Record proposed collection-account details and send them for approval.
+
+    Returns ``(change, approval_request)``. Nothing on the cooperative moves
+    until the approval is granted.
+    """
+    from approvals.models import ApprovalRequest
+    from approvals.services import submit_request
+    from tenants.models import BankDetailChange
+
+    proposed = {
+        "bank_name": (bank_name or "").strip(),
+        "bank_account_name": (bank_account_name or "").strip(),
+        "bank_account_no": (bank_account_no or "").strip(),
+    }
+    if not any(proposed.values()):
+        raise BankDetailError(
+            "Give at least a bank name and account number to propose.")
+
+    unchanged = all(
+        getattr(cooperative, field) == value
+        for field, value in proposed.items()
+    )
+    if unchanged:
+        raise BankDetailError(
+            "Those are already the cooperative's bank details — nothing to "
+            "approve.")
+
+    change = BankDetailChange.all_objects.create(
+        cooperative=cooperative,
+        previous_bank_name=cooperative.bank_name,
+        previous_bank_account_name=cooperative.bank_account_name,
+        previous_bank_account_no=cooperative.bank_account_no,
+        requested_by=actor,
+        **proposed,
+    )
+    request_obj = submit_request(
+        cooperative=cooperative,
+        action=ApprovalRequest.Action.COOP_BANK_UPDATE,
+        object_id=change.pk,
+        requested_by=actor,
+        note=note,
+    )
+    return change, request_obj
+
+
+def apply_bank_detail_change(change, *, actor=None):
+    """Write approved bank details onto the cooperative. Idempotent.
+
+    Called only from approvals._execute, so reaching here means a second
+    privileged officer has approved it. The before/after is audited because this
+    is where money starts going somewhere new.
+    """
+    from django.utils import timezone
+
+    from audit.services import record_action
+
+    if change.is_applied:
+        return change
+
+    coop = change.cooperative
+    before = {
+        "bank_name": coop.bank_name,
+        "bank_account_name": coop.bank_account_name,
+        "bank_account_no": coop.bank_account_no,
+    }
+    coop.bank_name = change.bank_name
+    coop.bank_account_name = change.bank_account_name
+    coop.bank_account_no = change.bank_account_no
+    coop.save(update_fields=["bank_name", "bank_account_name",
+                             "bank_account_no", "updated_at"])
+
+    change.applied_at = timezone.now()
+    change.save(update_fields=["applied_at", "updated_at"])
+
+    record_action(
+        cooperative=coop, actor=actor,
+        action="cooperative.bank_details_changed", entity=coop,
+        actor_label="" if actor else "System",
+        before=before,
+        after={
+            "bank_name": coop.bank_name,
+            "bank_account_name": coop.bank_account_name,
+            "bank_account_no": coop.bank_account_no,
+        },
+    )
+    return change

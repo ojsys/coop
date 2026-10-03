@@ -103,6 +103,14 @@ def record_contribution(
         journal=journal,
     )
 
+    # Reconciliation counts PaymentEvent rows, so money entered by an officer
+    # was invisible there while the ledger was perfectly correct. Recorded
+    # inside the transaction because it is part of the record, not a
+    # notification — unlike the receipt below.
+    from payments.services import record_internal_settlement
+
+    record_internal_settlement(contribution)
+
     # A receipt is worth little if sending it can undo the payment, so it goes
     # out only once the transaction commits.
     transaction.on_commit(lambda: _receipt(contribution))

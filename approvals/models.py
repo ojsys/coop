@@ -16,6 +16,9 @@ class ApprovalRequest(TenantScopedModel, TimeStampedModel):
         LOAN_APPROVE = "loan.approve", "Approve loan"
         LOAN_DISBURSE = "loan.disburse", "Disburse loan"
         DIVIDEND_POST = "dividend.post", "Post dividend"
+        # Kept short deliberately: `action` is max_length=20, and the obvious
+        # "cooperative.bank_details" is 24 characters and would be refused.
+        COOP_BANK_UPDATE = "coop.bank_update", "Change collection account"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

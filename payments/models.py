@@ -17,6 +17,12 @@ from core.models import TenantManager, TenantScopedModel, TimeStampedModel
 class Provider(models.TextChoices):
     PAYSTACK = "paystack", "Paystack"
     FLUTTERWAVE = "flutterwave", "Flutterwave"
+    # Not a payment service provider: money that reached the cooperative
+    # without one — cash handed over, a bank transfer entered by an officer, or
+    # a card payment confirmed through the return URL rather than a webhook.
+    # Reconciliation counts PaymentEvent rows, so without a value for these the
+    # whole screen stayed empty while the ledger was perfectly correct.
+    INTERNAL = "manual", "Recorded directly"
 
 
 class ProviderAccount(TenantScopedModel, TimeStampedModel):
