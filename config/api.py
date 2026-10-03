@@ -7,7 +7,7 @@ from rest_framework.routers import DefaultRouter
 from accounts.member_views import (
     MemberDividendViewSet, MemberDocumentSelfViewSet, MemberLoanProductViewSet,
     MemberLoanViewSet, MemberProfileView, MemberSavingsGoalViewSet,
-    MemberSavingsProductViewSet,
+    MemberSavingsProductViewSet, MemberWithdrawalViewSet,
 )
 from accounts.auth_views import (
     LoginView, PasswordResetConfirmView, PasswordResetRequestView,
@@ -27,7 +27,8 @@ from dividends.views import DividendViewSet
 from governance.views import (
     AttendanceViewSet, MeetingViewSet, ResolutionViewSet,
 )
-from ledger.views import AccountViewSet, JournalViewSet, LedgerEntryViewSet
+from ledger.views import (AccountViewSet, InternalTransferViewSet,
+                         JournalViewSet, LedgerEntryViewSet)
 from loans.views import (
     LoanProductViewSet, LoanRepaymentViewSet, LoanViewSet,
 )
@@ -47,7 +48,8 @@ from core.public_views import (
 )
 from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
-from savings.views import SavingsGoalViewSet, SavingsProductViewSet
+from savings.views import (SavingsGoalViewSet, SavingsProductViewSet,
+                          WithdrawalViewSet)
 from tenants.views import CooperativeViewSet, PlatformViewSet
 
 router = DefaultRouter()
@@ -64,6 +66,8 @@ router.register("contributions", ContributionViewSet, basename="contribution")
 router.register("accounts", AccountViewSet, basename="account")
 router.register("journals", JournalViewSet, basename="journal")
 router.register("ledger-entries", LedgerEntryViewSet, basename="ledger-entry")
+router.register("internal-transfers", InternalTransferViewSet,
+                basename="internal-transfer")
 router.register("provider-accounts", ProviderAccountViewSet,
                 basename="provider-account")
 router.register("payment-events", PaymentEventViewSet, basename="payment-event")
@@ -77,6 +81,7 @@ router.register("reports", ReportsViewSet, basename="report")
 router.register("savings-products", SavingsProductViewSet,
                 basename="savings-product")
 router.register("savings-goals", SavingsGoalViewSet, basename="savings-goal")
+router.register("withdrawals", WithdrawalViewSet, basename="withdrawal")
 router.register("dividends", DividendViewSet, basename="dividend")
 router.register("loan-products", LoanProductViewSet, basename="loan-product")
 router.register("loans", LoanViewSet, basename="loan")
@@ -96,6 +101,8 @@ router.register("me/savings-goals", MemberSavingsGoalViewSet,
 router.register("me/savings-products", MemberSavingsProductViewSet,
                 basename="me-savings-product")
 router.register("me/dividends", MemberDividendViewSet, basename="me-dividend")
+router.register("me/withdrawals", MemberWithdrawalViewSet,
+                basename="me-withdrawal")
 
 # Platform-admin (Startup Ripple) operational surfaces
 router.register("plans", PlanViewSet, basename="plan")

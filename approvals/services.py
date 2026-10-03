@@ -42,6 +42,16 @@ def _resolve(cooperative, action, object_id):
         # actual old and new values go in it. Approving a change you cannot see
         # is worse than having no control at all.
         return change, change.describe()
+    if action == ApprovalRequest.Action.SAVINGS_WITHDRAW:
+        from savings.models import Withdrawal
+
+        withdrawal = Withdrawal.all_objects.filter(
+            cooperative=cooperative, id=object_id).first()
+        if withdrawal is None:
+            raise ApprovalError("Withdrawal not found.")
+        if withdrawal.is_paid:
+            raise ApprovalError("That withdrawal has already been paid.")
+        return withdrawal, withdrawal.describe()
     raise ApprovalError("Unknown action.")
 
 
@@ -118,3 +128,9 @@ def _execute(request_obj, actor):
     elif request_obj.action == ApprovalRequest.Action.COOP_BANK_UPDATE:
         from tenants.services import apply_bank_detail_change
         apply_bank_detail_change(target, actor=actor)
+    elif request_obj.action == ApprovalRequest.Action.SAVINGS_WITHDRAW:
+        # The balance is re-checked inside pay_withdrawal, not at request time:
+        # a member's balance can fall between proposal and approval, and two
+        # pending withdrawals could otherwise overdraw them together.
+        from savings.services import pay_withdrawal
+        pay_withdrawal(target, actor=actor)

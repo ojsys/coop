@@ -195,3 +195,83 @@ def member_statement(membership):
             "balance": running,
         })
     return rows
+
+
+class TransferError(LedgerError):
+    """An internal transfer was refused."""
+
+
+@transaction.atomic
+def record_internal_transfer(*, cooperative, from_account, to_account, amount,
+                            occurred_at=None, note="", recorded_by=None):
+    """Record the cooperative moving its own money between two of its accounts.
+
+    Posts one balanced journal: credit the source (money out of it), debit the
+    destination (money into it). Both legs are the cooperative's own assets, so
+    total holdings are unchanged and no member balance moves — which is why this
+    needs one officer rather than two.
+
+    The asset-only rule is the load-bearing guard. Without it this would accept
+    Member Funds as a leg, letting an officer debit the cooperative's liability
+    to its members and credit cash — a withdrawal, with none of a withdrawal's
+    approval.
+    """
+    amount = _d(amount)
+    if amount <= ZERO:
+        raise TransferError("A transfer amount must be positive.")
+    if from_account.pk == to_account.pk:
+        raise TransferError("Choose two different accounts.")
+    for account in (from_account, to_account):
+        if account.cooperative_id != cooperative.id:
+            raise TransferError(
+                "Both accounts must belong to this cooperative.")
+        if account.kind != Account.Kind.ASSET:
+            raise TransferError(
+                f"{account.code} {account.name} is not an asset account. "
+                f"Internal transfers move money between the cooperative's own "
+                f"accounts; paying money out to a member is a withdrawal, "
+                f"which needs a second officer's approval.")
+
+    available = account_balance(from_account)
+    if amount > available:
+        raise TransferError(
+            f"{from_account.code} {from_account.name} holds "
+            f"{available:,.2f}, so {amount:,.2f} cannot be moved out of it.")
+
+    occurred_at = occurred_at or timezone.now()
+    journal = post_journal(
+        cooperative=cooperative,
+        reference=f"XFER-{timezone.now():%y%m%d%H%M%S}",
+        occurred_at=occurred_at,
+        memo=note or f"Transfer {from_account.code} → {to_account.code}",
+        created_by=recorded_by,
+        lines=[
+            Line(account=to_account, debit=amount,
+                 description=f"In from {from_account.code}"),
+            Line(account=from_account, credit=amount,
+                 description=f"Out to {to_account.code}"),
+        ],
+    )
+
+    from ledger.models import InternalTransfer
+
+    transfer = InternalTransfer.all_objects.create(
+        cooperative=cooperative,
+        from_account=from_account,
+        to_account=to_account,
+        amount=amount,
+        occurred_at=occurred_at,
+        note=note,
+        recorded_by=recorded_by,
+        journal=journal,
+    )
+
+    from audit.services import record_action
+
+    record_action(
+        cooperative=cooperative, actor=recorded_by,
+        action="ledger.internal_transfer", entity=transfer,
+        after={"from": from_account.code, "to": to_account.code,
+               "amount": str(amount)},
+    )
+    return transfer

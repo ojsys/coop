@@ -35,7 +35,7 @@ from contributions.services import record_contribution
 from core.context import set_current_cooperative, use_tenant
 from dividends.models import DividendAllocation, DividendDeclaration
 from governance.models import Attendance, Meeting, Resolution, Vote
-from ledger.models import Account, Journal, LedgerEntry
+from ledger.models import Account, InternalTransfer, Journal, LedgerEntry
 from loans.models import Loan, LoanProduct, LoanRepayment, RepaymentInstalment
 from payments.models import PaymentEvent, Provider, ProviderAccount
 from platform_admin.models import (Domain, Incident, Invoice,
@@ -45,7 +45,7 @@ from platform_admin.models import (Domain, Incident, Invoice,
                                    SiteFeature, SiteGalleryImage, SiteShowcase,
                                    SiteStep, SiteTrustBadge, Subscription,
                                    SupportTicket)
-from savings.models import SavingsGoal, SavingsProduct
+from savings.models import SavingsGoal, SavingsProduct, Withdrawal
 from tenants.models import BankDetailChange, Cooperative
 
 # Apps whose models the admin is expected to cover.
@@ -166,6 +166,15 @@ def dataset(coop, member, dues_type, member_funds):
             full_name="Tunde Bello", email="tunde@example.com",
             phone="08031111111", message="I was introduced by my cousin.",
         )
+        # Unpaid on purpose: a requested-but-unapproved payout is the state the
+        # read-only admin screen exists to show.
+        Withdrawal.objects.create(
+            membership=member, amount=Decimal("1000.00"),
+            channel=Withdrawal.Channel.TRANSFER,
+            destination_bank_name="GTBank",
+            destination_account_no="0123456789",
+            requested_by=member.user,
+        )
         # Left unapplied on purpose: a pending proposal is the state the
         # read-only admin screen exists to show, and the one a reviewer would
         # actually open.
@@ -184,6 +193,19 @@ def dataset(coop, member, dues_type, member_funds):
         reference="CTB-REF-1", amount=Decimal("5000.00"),
         status=PaymentEvent.Status.UNMATCHED, payload={"event": "charge.success"},
     )
+
+    # A real transfer between two of the cooperative's own asset accounts,
+    # posted through the service so the row and its journal agree.
+    from ledger.services import record_internal_transfer
+
+    with use_tenant(coop):
+        cash = Account.all_objects.get(cooperative=coop, code="1000")
+        bank = Account.all_objects.get(cooperative=coop, code="1010")
+        record_internal_transfer(
+            cooperative=coop, from_account=cash, to_account=bank,
+            amount=Decimal("1000.00"), note="Banked the cash float",
+            recorded_by=member.user,
+        )
 
     AuditLog.all_objects.create(
         cooperative=coop, actor=member.user, action="membership.created",

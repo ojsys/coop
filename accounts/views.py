@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from django.conf import settings
 from django.db import IntegrityError
 from django.db.models import ProtectedError
-from rest_framework import mixins, permissions, viewsets
+from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -15,7 +14,7 @@ from accounts.serializers import (
     MemberDocumentSerializer, MembershipSerializer, RoleSerializer,
     UserSerializer,
 )
-from core.tenancy import resolve_cooperative
+from core.permissions import IsPrivilegedOfficerOrReadOnly
 from core.views import TenantScopedViewMixin
 from ledger.services import member_statement
 
@@ -27,70 +26,14 @@ class MeView(viewsets.ViewSet):
         return Response(UserSerializer(request.user).data)
 
 
-class CanManageMembers(permissions.BasePermission):
-    """Anyone in the cooperative may read the member list; only a privileged
-    member of it (or a platform admin) may create or change memberships.
-
-    Without this the viewset was ``IsAuthenticated`` alone while
-    ``MembershipSerializer`` exposes ``role``, ``status``, ``member_no`` and
-    ``share_capital`` as writable — so any member could PATCH their own
-    membership onto a privileged role and take the cooperative over, or demote
-    its real officers. ``MemberSelfSerializer`` anticipated exactly this and
-    makes those fields read-only, but it is only wired into /me/profile/.
-
-    Mirrors CanManageRoles, including resolving the tenant itself: it is not
-    bound until the view's initial() runs, which is after this check.
-    """
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not (user and user.is_authenticated):
-            return False
-        if request.method in permissions.SAFE_METHODS:
-            return True
-        if user.is_platform_admin:
-            return True
-        coop = resolve_cooperative(
-            user, request.META.get(settings.TENANT_HEADER))
-        if coop is None:
-            return False
-        return any(
-            m.role and m.role.is_privileged
-            for m in Membership.all_objects.filter(
-                user=user, cooperative=coop).select_related("role")
-        )
-
-
-class CanManageRoles(permissions.BasePermission):
-    """Anyone may read roles; only a privileged member of the active
-    cooperative (or a platform admin) may create/edit/delete them."""
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not (user and user.is_authenticated):
-            return False
-        if request.method in permissions.SAFE_METHODS:
-            return True
-        if user.is_platform_admin:
-            return True
-        # The tenant isn't bound until the view's initial() runs (after this
-        # permission check), so resolve it the same way here.
-        coop = resolve_cooperative(
-            user, request.META.get(settings.TENANT_HEADER))
-        if coop is None:
-            return False
-        return any(
-            m.role and m.role.is_privileged
-            for m in Membership.all_objects.filter(
-                user=user, cooperative=coop).select_related("role")
-        )
-
-
 class RoleViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     """Roles available in the active cooperative (CRUD for privileged members)."""
 
     serializer_class = RoleSerializer
-    permission_classes = [CanManageRoles]
+    # Any member may read the roles; only a privileged officer may create, edit
+    # or delete one. Under IsAuthenticated a member could mint themselves a role
+    # carrying privileged permissions.
+    permission_classes = [IsPrivilegedOfficerOrReadOnly]
 
     def get_queryset(self):
         return Role.objects.all()
@@ -120,7 +63,13 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     """Members of the active cooperative. Tenant-scoped automatically."""
 
     serializer_class = MembershipSerializer
-    permission_classes = [CanManageMembers]
+    # Reads open to the cooperative; writes to privileged officers only.
+    # MembershipSerializer exposes role, status, member_no and share_capital as
+    # writable, so under IsAuthenticated alone any member could PATCH their own
+    # membership onto a privileged role and take the society over, or demote its
+    # real officers. (MemberSelfSerializer makes those read-only, but it is only
+    # wired into /me/profile/.)
+    permission_classes = [IsPrivilegedOfficerOrReadOnly]
     # Accept multipart so a headshot can be uploaded alongside member fields.
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 

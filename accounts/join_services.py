@@ -41,7 +41,7 @@ def _unique_slug(name: str) -> str:
 # addressed to a cooperative: communications.cooperative_notification_emails —
 # its published contact address plus every privileged officer.
 #
-# Privileged-only on purpose. JoinRequestViewSet is gated by IsPrivilegedMember,
+# Privileged-only on purpose. JoinRequestViewSet is gated by IsPrivilegedOfficer,
 # so a Chairperson cannot view or decide a request; mailing them "review it in
 # the console" would send them to a permission wall. The contact address is what
 # stops a request going unseen when a cooperative has no privileged officer,

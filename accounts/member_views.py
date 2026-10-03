@@ -8,6 +8,8 @@ Officer/console endpoints (``/loans/``, ``/savings-goals/`` …) stay separate.
 """
 from __future__ import annotations
 
+from decimal import InvalidOperation
+
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -23,8 +25,10 @@ from dividends.models import DividendAllocation
 from dividends.serializers import MemberDividendSerializer
 from loans.models import Loan, LoanProduct
 from loans.serializers import LoanProductSerializer, LoanSerializer
-from savings.models import SavingsGoal, SavingsProduct
-from savings.serializers import SavingsGoalSerializer, SavingsProductSerializer
+from savings.models import SavingsGoal, SavingsProduct, Withdrawal
+from savings.serializers import (SavingsGoalSerializer,
+                                 SavingsProductSerializer,
+                                 WithdrawalSerializer)
 
 
 class MemberDocumentWriteSerializer(MemberDocumentSerializer):
@@ -251,3 +255,58 @@ class MemberSavingsProductViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
 
     def get_queryset(self):
         return SavingsProduct.objects.filter(active=True)
+
+
+class MemberWithdrawalViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
+                              mixins.RetrieveModelMixin,
+                              viewsets.GenericViewSet):
+    """`/me/withdrawals/` — a member asking for their own savings back.
+
+    The member may only ever request against their *own* membership: it is taken
+    from the caller and never read from the request body, so naming someone
+    else's membership is not merely refused, it is impossible to express.
+
+    Nothing moves on creation. The request lands in the officers' approvals
+    queue, and the payout posts when an officer approves it. Note the control
+    this carries: because the *member* is the requester, the maker-checker rule
+    is satisfied by any one officer approving — one authorisation, where an
+    officer-initiated payout needs two.
+    """
+
+    serializer_class = WithdrawalSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        membership = _membership(self.request)
+        if membership is None:
+            return Withdrawal.objects.none()
+        return Withdrawal.objects.filter(
+            membership=membership).select_related("journal", "requested_by")
+
+    def create(self, request, *args, **kwargs):
+        from savings.services import WithdrawalError, request_own_withdrawal
+
+        membership = _membership(request)
+        if membership is None:
+            raise ValidationError(
+                "You are not a member of this cooperative.")
+
+        try:
+            withdrawal, approval = request_own_withdrawal(
+                cooperative=membership.cooperative,
+                membership=membership,
+                amount=request.data.get("amount"),
+                channel=request.data.get("channel", "transfer"),
+                reason=request.data.get("reason", ""),
+            )
+        except WithdrawalError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        except (InvalidOperation, TypeError):
+            return Response({"detail": "Enter a valid amount."}, status=400)
+
+        payload = self.get_serializer(withdrawal).data
+        payload["approval_id"] = approval.pk
+        payload["detail"] = (
+            "Your request has been sent to your cooperative's officers. "
+            "Nothing has been paid out yet.")
+        return Response(payload, status=201)

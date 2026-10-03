@@ -168,3 +168,47 @@ class LedgerEntry(AppendOnlyModel, TenantScopedModel, TimeStampedModel):
     def __str__(self) -> str:
         side = f"Dr {self.debit}" if self.debit else f"Cr {self.credit}"
         return f"{self.account.code} {side}"
+
+
+class InternalTransfer(TenantScopedModel, TimeStampedModel):
+    """A record of the cooperative moving its own money between its accounts.
+
+    Fund movement is not automatic: an officer makes the real transfer at the
+    bank, then records it here so the ledger matches reality — typically
+    sweeping collections out of Bank/PSP Settlement into Cash, or the reverse.
+
+    Deliberately **not** approval-gated, unlike a member withdrawal. Nothing
+    leaves the cooperative: both legs are its own asset accounts, the totals net
+    to zero, and no member's balance moves. That is the same risk profile as
+    recording a contribution, which one officer already posts directly. The
+    control that matters here is in the service, which refuses any account that
+    is not an asset — otherwise "internal transfer" would be a way to debit
+    Member Funds and pay money out without a second officer.
+    """
+
+    from_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, related_name="transfers_out")
+    to_account = models.ForeignKey(
+        Account, on_delete=models.PROTECT, related_name="transfers_in")
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    # When the money actually moved at the bank, which may not be when an
+    # officer got round to recording it.
+    occurred_at = models.DateTimeField()
+    note = models.CharField(max_length=255, blank=True)
+    recorded_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="internal_transfers")
+    journal = models.OneToOneField(
+        Journal, on_delete=models.PROTECT, related_name="internal_transfer",
+        help_text="The balanced posting this transfer produced.")
+
+    class Meta:
+        ordering = ["-occurred_at", "-id"]
+
+    def __str__(self) -> str:
+        return (f"{self.amount} {self.from_account.code}→"
+                f"{self.to_account.code}")
+
+    def describe(self) -> str:
+        return (f"{self.from_account.code} {self.from_account.name} → "
+                f"{self.to_account.code} {self.to_account.name}")

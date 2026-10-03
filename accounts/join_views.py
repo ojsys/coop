@@ -8,10 +8,8 @@ they are throttled and validate carefully.
 """
 from __future__ import annotations
 
-from django.conf import settings
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import BasePermission
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 
@@ -20,9 +18,8 @@ from accounts.join_services import (
     SignupError, apply_for_cooperative, approve_join_request,
     reject_join_request, request_to_join,
 )
-from accounts.models import Membership
+from core.permissions import IsPrivilegedOfficer
 from core.public_views import PublicView
-from core.tenancy import resolve_cooperative
 from core.views import TenantScopedViewMixin
 from tenants.models import Cooperative
 
@@ -142,28 +139,6 @@ class JoinRequestCreateView(PublicView):
 
 
 # ── Officers: deciding requests ─────────────────────────────────────────────
-class IsPrivilegedMember(BasePermission):
-    """A platform admin, or an officer of the cooperative in play."""
-
-    def has_permission(self, request, view):
-        user = request.user
-        if not (user and user.is_authenticated):
-            return False
-        if user.is_platform_admin:
-            return True
-        # The tenant isn't bound until the view's initial() runs, so resolve it
-        # the same way here (mirrors accounts.views.CanManageRoles).
-        cooperative = resolve_cooperative(
-            user, request.META.get(settings.TENANT_HEADER))
-        if cooperative is None:
-            return False
-        return any(
-            m.role and m.role.is_privileged
-            for m in Membership.all_objects.filter(
-                user=user, cooperative=cooperative).select_related("role")
-        )
-
-
 class JoinRequestSerializer(serializers.ModelSerializer):
     decided_by_name = serializers.CharField(source="decided_by.full_name",
                                             read_only=True, default=None)
@@ -185,7 +160,9 @@ class JoinRequestViewSet(TenantScopedViewMixin,
     """Membership requests waiting on this society's officers."""
 
     serializer_class = JoinRequestSerializer
-    permission_classes = [IsPrivilegedMember]
+    # Officers only, reads included: a pending request carries a stranger's name,
+    # email and phone, which is not the whole membership's business.
+    permission_classes = [IsPrivilegedOfficer]
 
     def get_queryset(self):
         qs = JoinRequest.objects.select_related("decided_by", "membership")

@@ -18,7 +18,7 @@ from django.db.models.functions import Coalesce
 from core.admin import (AppendOnlyAdmin, TenantScopedModelAdmin,
                         TenantScopedTabularInline, TwoFactorActionsMixin,
                         TwoFactorRequiredMixin)
-from ledger.models import Account, Journal, LedgerEntry
+from ledger.models import Account, InternalTransfer, Journal, LedgerEntry
 
 _MONEY = DecimalField(max_digits=16, decimal_places=2)
 _ZERO = Value(Decimal("0.00"), output_field=_MONEY)
@@ -136,3 +136,33 @@ class LedgerEntryAdmin(AppendOnlyAdmin):
                      "description")
     ordering = ("-id",)
     list_select_related = ("journal", "account", "membership", "cooperative")
+
+
+@admin.register(InternalTransfer)
+class InternalTransferAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
+    """A recorded movement of the cooperative's own money — read-only.
+
+    The row describes a journal that has already posted, so editing it here
+    would let the description drift from the posting it documents. A mistake is
+    corrected by reversing the journal (the action on Journal), which leaves the
+    original visible.
+    """
+
+    list_display = ("occurred_at", "amount", "from_account", "to_account",
+                    "recorded_by", "cooperative")
+    list_filter = ("cooperative", "occurred_at")
+    search_fields = ("note", "from_account__code", "to_account__code",
+                     "journal__reference")
+    ordering = ("-occurred_at",)
+    date_hierarchy = "occurred_at"
+    list_select_related = ("from_account", "to_account", "recorded_by",
+                           "cooperative")
+    readonly_fields = ("cooperative", "from_account", "to_account", "amount",
+                       "occurred_at", "note", "recorded_by", "journal",
+                       "created_at", "updated_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

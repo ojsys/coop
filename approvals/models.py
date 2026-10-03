@@ -19,6 +19,7 @@ class ApprovalRequest(TenantScopedModel, TimeStampedModel):
         # Kept short deliberately: `action` is max_length=20, and the obvious
         # "cooperative.bank_details" is 24 characters and would be refused.
         COOP_BANK_UPDATE = "coop.bank_update", "Change collection account"
+        SAVINGS_WITHDRAW = "savings.withdraw", "Pay out member savings"
 
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"

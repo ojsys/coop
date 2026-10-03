@@ -67,3 +67,64 @@ class SavingsGoal(TenantScopedModel, TimeStampedModel):
             )
             return agg["s"] or Decimal("0.00")
         return self.membership.savings_balance
+
+
+class Withdrawal(TenantScopedModel, TimeStampedModel):
+    """A member being paid out some of their savings.
+
+    Nothing moves when this is created. A withdrawal is money leaving the
+    cooperative, so it is recorded here, approved by a *different* privileged
+    officer through the approvals queue, and only then posted to the ledger —
+    debiting Member Funds (the liability owed to that member) and crediting
+    whichever account the officer actually paid from.
+
+    The destination bank details are **copied** rather than referenced: a payout
+    record has to say where the money went, and a member who edits their account
+    afterwards must not rewrite the history of a payment already made.
+
+    There is no "cancel" once paid. The ledger is append-only, so a mistaken
+    payout is corrected by a reversing journal, with the original left visible.
+    """
+
+    class Channel(models.TextChoices):
+        CASH = "cash", "Cash"
+        TRANSFER = "transfer", "Bank transfer"
+
+    membership = models.ForeignKey(
+        "accounts.Membership", on_delete=models.PROTECT,
+        related_name="withdrawals")
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    channel = models.CharField(max_length=10, choices=Channel.choices,
+                               default=Channel.TRANSFER)
+    reason = models.CharField(max_length=255, blank=True)
+
+    # Where it was sent, as it stood when the withdrawal was requested.
+    destination_bank_name = models.CharField(max_length=120, blank=True)
+    destination_account_no = models.CharField(max_length=20, blank=True)
+
+    requested_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="requested_withdrawals")
+    paid_at = models.DateTimeField(null=True, blank=True)
+    journal = models.OneToOneField(
+        "ledger.Journal", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="withdrawal",
+        help_text="The ledger posting, set when the payout is approved.")
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.membership.member_no} · {self.amount}"
+
+    @property
+    def is_paid(self) -> bool:
+        return self.paid_at is not None
+
+    def describe(self) -> str:
+        """Who, how much, and to where — this is the only text the approver sees."""
+        where = (f"{self.destination_bank_name} {self.destination_account_no}".strip()
+                 if self.channel == self.Channel.TRANSFER else "cash")
+        return (f"Pay {self.membership.user.full_name} "
+                f"({self.membership.member_no}) N {self.amount:,.2f} "
+                f"to {where or 'no account on file'}")

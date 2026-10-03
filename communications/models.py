@@ -80,6 +80,9 @@ class Notification(TenantScopedModel, TimeStampedModel):
         MEETING = "meeting", "Meeting reminder"
         VOTE = "vote", "Vote open"
         LOAN = "loan", "Loan update"
+        # Its own kind rather than reusing CONTRIBUTION, which reads
+        # "Contribution received" — the opposite of what a payout is.
+        WITHDRAWAL = "withdrawal", "Savings withdrawal"
 
     membership = models.ForeignKey(
         "accounts.Membership", on_delete=models.CASCADE,

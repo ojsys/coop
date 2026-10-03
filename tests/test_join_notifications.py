@@ -4,7 +4,7 @@ Who hears about a join request.
 Two defects are pinned here. First, a request could go entirely unseen: a
 cooperative with no privileged officer had nobody to notify, and nothing said
 so. The fix is the published contact address as a fallback — *not* widening the
-role check, because JoinRequestViewSet is gated by IsPrivilegedMember and a
+role check, because JoinRequestViewSet is gated by IsPrivilegedOfficer and a
 Chairperson mailed "review it in the console" would only find a permission
 wall. Second, the applicant was never acknowledged at all: they had a web page
 that vanished when the tab closed and no way to distinguish a submitted request
@@ -57,7 +57,7 @@ def test_a_chairperson_is_not_notified(coop,
                                        django_capture_on_commit_callbacks):
     """A Chairperson cannot act on a join request.
 
-    IsPrivilegedMember gates the viewset, and Chairperson holds only
+    IsPrivilegedOfficer gates the viewset, and Chairperson holds only
     governance/reporting permissions — so mailing them "review it in the
     console" would send them to a permission wall. Notifying people who are
     powerless to respond trains them to ignore the mail.
