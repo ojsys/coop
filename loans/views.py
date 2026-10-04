@@ -4,7 +4,10 @@ from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 
-from core.permissions import IsPrivilegedOfficer, IsPrivilegedOfficerOrReadOnly
+from core.context import get_current_cooperative
+from core.permissions import (IsPrivilegedOfficer,
+                              IsPrivilegedOfficerOrOfficeHolderReadOnly,
+                              IsPrivilegedOfficerOrReadOnly)
 from core.views import TenantScopedViewMixin
 from loans.models import Loan, LoanProduct, LoanRepayment
 from loans.serializers import (
@@ -46,7 +49,16 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     """
 
     serializer_class = LoanSerializer
-    permission_classes = [IsPrivilegedOfficer]
+    # Office-holders read, privileged officers act. A Chairperson sits on the
+    # console to approve things and needs to see the loan book and the
+    # awaiting-payment queue — but holds none of PRIVILEGED_PERMISSIONS, so they
+    # cannot approve, disburse or record a repayment here.
+    #
+    # Not plain ...OrReadOnly: this queryset is scoped to the cooperative rather
+    # than to the caller, and LoanSerializer renders every member's bank account
+    # number, phone and email. Opening reads to *any* authenticated member would
+    # hand that to all of them.
+    permission_classes = [IsPrivilegedOfficerOrOfficeHolderReadOnly]
     http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
@@ -100,7 +112,56 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def disburse(self, request, pk=None):
+        """Record a **cash** disbursement — money handed over, not transferred.
+
+        Deliberately separate from pay_electronically rather than one action
+        with a mode flag: these are different real-world events, and a loan
+        already settled in cash outside the system must be *recorded*, not paid
+        a second time. The button an officer presses should say which it is.
+        """
         return self._act(disburse_loan, actor=request.user)
+
+    @action(detail=True, methods=["post"], url_path="pay-electronically")
+    def pay_electronically(self, request, pk=None):
+        """Transfer an already-approved loan to the member's bank.
+
+        Approval pays out automatically where it can, so this is for the ones it
+        could not: approved before that existed, or approved when the wallet was
+        short or the bank code missing.
+        """
+        from loans.services import disburse_loan_electronically
+        from payments.providers import PaymentInitError
+        from payments.services import PayoutError
+
+        loan = self.get_object()
+        try:
+            payout = disburse_loan_electronically(loan, actor=request.user)
+        except (LoanError, PayoutError) as exc:
+            return Response({"detail": str(exc)}, status=400)
+        except PaymentInitError as exc:
+            # The provider refused. Not the officer's input, so pass its words on.
+            return Response({"detail": str(exc)}, status=502)
+
+        loan.refresh_from_db()
+        data = self.get_serializer(loan).data
+        data["payout_reference"] = payout.reference
+        return Response(data)
+
+    @action(detail=False, methods=["get"])
+    def health(self, request):
+        """Loans whose state does not add up, plus the awaiting-payment queue.
+
+        Read-only. The two are returned together but counted apart: approved
+        loans that were never paid are a work queue, not damage.
+        """
+        from loans.health import loan_health
+
+        report = loan_health(get_current_cooperative())
+        return Response({
+            **{key: value for key, value in report.items()
+               if key != "findings"},
+            "findings": [finding.as_dict() for finding in report["findings"]],
+        })
 
     @action(detail=True, methods=["post"])
     def repay(self, request, pk=None):
@@ -116,11 +177,14 @@ class LoanRepaymentViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
     bank transfers (``?status=pending``)."""
 
     serializer_class = RepaymentClaimSerializer
-    # Privileged officers only. ``confirm`` posts a repayment to the ledger, and
-    # the list shows other members' repayment claims — neither is ordinary
-    # member business. Members report their own transfers through
-    # /me/loans/{id}/report-transfer/.
-    permission_classes = [IsPrivilegedOfficer]
+    # Office-holders read, privileged officers act. A Chairperson can see which
+    # claims are waiting — part of knowing the state of the society's lending —
+    # but ``confirm`` posts a repayment to the ledger, which stays privileged.
+    #
+    # Not plain ...OrReadOnly: the list shows other members' claims and
+    # RepaymentClaimSerializer carries their bank details. Members report their
+    # own transfers through /me/loans/{id}/report-transfer/ and never need this.
+    permission_classes = [IsPrivilegedOfficerOrOfficeHolderReadOnly]
 
     def get_queryset(self):
         qs = LoanRepayment.objects.select_related(

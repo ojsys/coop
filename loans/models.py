@@ -78,6 +78,23 @@ class Loan(TenantScopedModel, TimeStampedModel):
     destination_bank_code = models.CharField(max_length=10, blank=True)
     destination_account_no = models.CharField(max_length=20, blank=True)
 
+    # The journal that actually moved the principal.
+    #
+    # Recorded because the two disbursement paths leave differently shaped
+    # traces: the cash path posts a journal referenced "LOAN-<id>-DISB", while
+    # the electronic path's journal is written by send_payout and referenced
+    # "PO-...". Without this field, answering "is this loan's DISBURSED status
+    # backed by a ledger entry?" meant guessing from two different patterns —
+    # and a status with no journal behind it is the one inconsistency that
+    # really matters, because it claims money moved when the books disagree.
+    #
+    # Cleared by revert_disbursement: if the payment failed, there is no
+    # disbursement to point at any more.
+    disbursement_journal = models.ForeignKey(
+        "ledger.Journal", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="disbursed_loans",
+    )
+
     class Meta:
         ordering = ["-created_at"]
 

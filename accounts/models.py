@@ -103,9 +103,29 @@ class Role(TenantScopedModel, TimeStampedModel):
     def __str__(self) -> str:
         return f"{self.name} @ {self.cooperative_id}"
 
+    # What an ordinary member holds. Anything beyond this is an office.
+    MEMBER_PERMISSIONS = {"self.view", "governance.vote"}
+
     @property
     def is_privileged(self) -> bool:
         return bool(self.PRIVILEGED_PERMISSIONS.intersection(self.permissions))
+
+    @property
+    def is_officer(self) -> bool:
+        """Holds an office — any permission beyond an ordinary member's.
+
+        Broader than ``is_privileged`` and deliberately so. A Chairperson holds
+        governance.approve and reports.view but none of PRIVILEGED_PERMISSIONS,
+        so they cannot post to the ledger or manage members — yet they sit on the
+        console to approve things and need to *see* what they are approving.
+        This is the line between "may look" and "may act".
+
+        Defined by permissions rather than by slug, because a cooperative can add
+        its own roles: a society that creates an "Auditor" role with
+        reports.view gets read access without anyone editing this code, and a
+        slug comparison would have missed it.
+        """
+        return bool(set(self.permissions) - self.MEMBER_PERMISSIONS)
 
     @classmethod
     def seed_defaults(cls, cooperative) -> dict[str, "Role"]:

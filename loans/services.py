@@ -239,22 +239,27 @@ def disburse_loan(loan, *, actor=None, from_account_code="1000"):
         ],
         memo=f"Loan {loan.id} disbursement", created_by=actor)
 
-    _finalise_disbursement(loan)
+    _finalise_disbursement(loan, journal)
     return journal
 
 
-def _finalise_disbursement(loan):
+def _finalise_disbursement(loan, journal=None):
     """Mark a loan disbursed, build its schedule and tell the member.
 
     Shared by both disbursement paths so they cannot drift: cash posts its own
     journal crediting Cash, electronic posts one crediting the wallet, and
     everything *after* the money moves is identical.
+
+    ``journal`` is stored on the loan so that "disbursed" can later be checked
+    against a real ledger entry rather than inferred from a reference pattern.
     """
     from loans.models import Loan
 
     loan.status = Loan.Status.DISBURSED
     loan.disbursed_at = timezone.now()
-    loan.save(update_fields=["status", "disbursed_at", "updated_at"])
+    loan.disbursement_journal = journal
+    loan.save(update_fields=["status", "disbursed_at", "disbursement_journal",
+                             "updated_at"])
     build_schedule(loan)
     _notify_disbursed(loan)
     return loan
@@ -279,7 +284,11 @@ def revert_disbursement(loan, *, reason="", actor=None):
 
     loan.status = Loan.Status.APPROVED
     loan.disbursed_at = None
-    loan.save(update_fields=["status", "disbursed_at", "updated_at"])
+    # No disbursement to point at any more — the journal that moved the money
+    # has been reversed, so leaving the link would make the loan look paid.
+    loan.disbursement_journal = None
+    loan.save(update_fields=["status", "disbursed_at", "disbursement_journal",
+                             "updated_at"])
     RepaymentInstalment.all_objects.filter(loan=loan).delete()
 
     _notify_officers(
@@ -339,7 +348,7 @@ def disburse_loan_electronically(loan, *, actor=None):
         reason=f"Loan {loan.id} disbursement",
         actor=actor,
     )
-    _finalise_disbursement(loan)
+    _finalise_disbursement(loan, payout.journal)
     return payout
 
 

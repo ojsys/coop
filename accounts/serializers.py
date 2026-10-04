@@ -23,6 +23,7 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
     role_slug = serializers.CharField(source="role.slug", default=None)
     role_name = serializers.CharField(source="role.name", default=None)
     is_privileged = serializers.SerializerMethodField()
+    is_officer = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
@@ -30,10 +31,19 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
                   "cooperative_slug", "cooperative_logo",
                   "cooperative_favicon", "cooperative_brand_color",
                   "member_no", "role_slug", "role_name",
-                  "is_privileged", "status", "share_capital"]
+                  "is_privileged", "is_officer", "status", "share_capital"]
 
     def get_is_privileged(self, obj) -> bool:
         return bool(obj.role and obj.role.is_privileged)
+
+    def get_is_officer(self, obj) -> bool:
+        """Holds an office of any kind — the console's own entry rule.
+
+        Exposed so the frontend can stop inferring it from ``role_slug !==
+        'member'``, which diverges from the backend the moment a cooperative
+        adds a role of its own.
+        """
+        return bool(obj.role and obj.role.is_officer)
 
 
 class UserSerializer(serializers.ModelSerializer):
