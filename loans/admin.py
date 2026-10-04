@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from django.contrib import admin
+from django import forms
+from django.contrib import admin, messages
+from django.core.exceptions import ValidationError
 from django.db.models import DecimalField, Q, Sum, Value
 from django.db.models.functions import Coalesce
 
@@ -64,6 +66,52 @@ class LoanRepaymentInline(TenantScopedTabularInline):
         return False
 
 
+class LoanAdminForm(forms.ModelForm):
+    """Keeps the ``status`` field away from the two transitions that move money.
+
+    Every other status change is a label. Crossing into or out of **disbursed**
+    is not: the disbursement posts a journal, builds the repayment schedule and
+    stamps ``disbursed_at``. Typing the status by hand does none of that, and
+    leaves the loan book contradicting the accounts — a loan that says the
+    principal never left while the ledger says it did, or the reverse.
+
+    So those two transitions are refused here and routed to the actions below,
+    which go through the loan services and post a proper reversal. The field
+    stays editable for everything else.
+    """
+
+    class Meta:
+        model = Loan
+        fields = "__all__"
+
+    def clean_status(self):
+        status = self.cleaned_data["status"]
+        if self.instance.pk is None:
+            return status
+
+        # ``_post_clean`` applies cleaned_data to the instance *after* this runs,
+        # so self.instance still holds what is in the database.
+        was = self.instance.status
+        disbursed = Loan.Status.DISBURSED
+
+        if was == disbursed and status != disbursed:
+            raise ValidationError(
+                "This loan has been disbursed, so money has moved. Changing the "
+                "status here would leave the ledger showing a payment that the "
+                "loan no longer claims. Use the “Reverse disbursement” action on "
+                "the loan list instead — it posts a reversing journal, deletes "
+                "the repayment schedule and records who did it.")
+
+        if status == disbursed and was != disbursed:
+            raise ValidationError(
+                "Marking a loan disbursed by hand moves no money and builds no "
+                "repayment schedule, so nothing would ever fall due. Disburse it "
+                "from the console (Loans → Review & pay), which posts the "
+                "journal and notifies the member.")
+
+        return status
+
+
 @admin.register(Loan)
 class LoanAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     list_display = ("id", "membership", "product", "principal", "interest_rate",
@@ -79,6 +127,73 @@ class LoanAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
                        "total_repayable", "repaid_amount", "outstanding",
                        "monthly_instalment", "created_at", "updated_at")
     inlines = (RepaymentInstalmentInline, LoanRepaymentInline)
+    form = LoanAdminForm
+    actions = ("reverse_disbursement", "return_to_pending")
+    # Both post or depend on ledger entries, so they follow the same rule as
+    # editing: 2FA first.
+    two_factor_actions = ("reverse_disbursement", "return_to_pending")
+
+    @admin.action(description="Reverse disbursement (posts a ledger reversal)")
+    def reverse_disbursement(self, request, queryset):
+        """Undo a disbursement properly: reverse the journal, drop the schedule.
+
+        For a loan paid in error, or marked disbursed when the money never
+        actually went out.
+        """
+        from loans.services import LoanError, unwind_disbursement
+
+        done, failed = 0, 0
+        for loan in queryset:
+            try:
+                unwind_disbursement(
+                    loan, reason="Reversed by an operator in the admin.",
+                    actor=request.user)
+            except LoanError as exc:
+                self.message_user(request, f"Loan {loan.pk}: {exc}",
+                                  messages.WARNING)
+                failed += 1
+                continue
+            done += 1
+
+        if done:
+            self.message_user(
+                request,
+                f"Reversed {done} disbursement(s). Each reversal is posted as a "
+                f"mirror journal — the original entry is left in place — and the "
+                f"loan is back to approved.",
+                messages.SUCCESS)
+        if not done and not failed:
+            self.message_user(request, "Nothing selected.", messages.INFO)
+
+    @admin.action(description="Return to pending (un-approve)")
+    def return_to_pending(self, request, queryset):
+        """Send a loan back to the approval queue.
+
+        A disbursed loan is refused rather than unwound silently: that would
+        reverse a ledger entry as a side effect of a status change, which is
+        exactly the kind of quiet money movement this admin is built to prevent.
+        Reverse the disbursement first, then do this.
+        """
+        from loans.services import LoanError
+        from loans.services import return_to_pending as _return
+
+        done = 0
+        for loan in queryset:
+            try:
+                _return(loan, reason="Returned to pending by an operator.",
+                        actor=request.user)
+            except LoanError as exc:
+                self.message_user(request, f"Loan {loan.pk}: {exc}",
+                                  messages.WARNING)
+                continue
+            done += 1
+
+        if done:
+            self.message_user(
+                request,
+                f"{done} loan(s) returned to pending. The previous approval has "
+                f"been cleared, so each needs deciding again.",
+                messages.SUCCESS)
 
     fieldsets = (
         (None, {

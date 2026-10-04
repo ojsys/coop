@@ -266,6 +266,86 @@ def _finalise_disbursement(loan, journal=None):
 
 
 @transaction.atomic
+def unwind_disbursement(loan, *, reason="", actor=None):
+    """Undo a disbursement completely — the ledger entry included.
+
+    ``revert_disbursement`` deliberately undoes only the *loan* side, because its
+    caller is the payment layer, which has already reversed the payout's journal
+    by the time it runs. Anything else that needs to undo a disbursement — an
+    operator correcting a mistake, say — has to reverse the journal itself, or
+    the books keep saying money left while the loan says it never did.
+
+    The signal for whether that reversal is still owed is
+    ``loan.disbursement_journal``: the payment layer clears it when it unwinds,
+    so a link that is still set means the entry is still live. That holds for
+    both paths — the cash journal and the payout's — so this one function
+    handles either.
+
+    Corrections are made by posting the mirror image, never by deleting: the
+    original entry stays in the ledger and the reversal sits beside it.
+    """
+    from django.db import transaction
+
+    from ledger.services import reverse_journal
+    from loans.models import Loan
+
+    if loan.status != Loan.Status.DISBURSED:
+        raise LoanError(
+            f"Loan {loan.pk} is {loan.get_status_display().lower()}, not "
+            f"disbursed — there is no disbursement to undo.")
+
+    with transaction.atomic():
+        journal = loan.disbursement_journal
+        if journal is not None and not journal.is_reversed:
+            reverse_journal(
+                journal, created_by=actor,
+                memo=(f"Disbursement of loan {loan.pk} reversed"
+                      f"{(': ' + reason) if reason else '.'}"),
+            )
+        return revert_disbursement(loan, reason=reason, actor=actor)
+
+
+def return_to_pending(loan, *, reason="", actor=None):
+    """Put an approved loan back to PENDING, undoing the approval itself.
+
+    Separate from ``unwind_disbursement`` because it moves nothing: the approval
+    decision is cleared so the loan returns to the queue for a fresh one. A
+    disbursed loan is refused rather than quietly unwound — money has moved, and
+    reversing a ledger entry is not something to do as a side effect of a status
+    change.
+    """
+    from django.db import transaction
+
+    from audit.services import record_action
+    from loans.models import Loan
+
+    if loan.status == Loan.Status.DISBURSED:
+        raise LoanError(
+            f"Loan {loan.pk} has been disbursed. Reverse the disbursement "
+            f"first — that posts a ledger reversal — then return it to pending.")
+    if loan.status == Loan.Status.PENDING:
+        return loan
+
+    before = loan.status
+    with transaction.atomic():
+        loan.status = Loan.Status.PENDING
+        # The decision is being withdrawn, so the record of who made it goes
+        # too; leaving it would show the loan as decided by someone who no
+        # longer has, and a later approval would overwrite it anyway.
+        loan.decided_by = None
+        loan.decided_at = None
+        loan.save(update_fields=["status", "decided_by", "decided_at",
+                                 "updated_at"])
+        record_action(
+            cooperative=loan.cooperative, actor=actor,
+            actor_label="" if actor else "System",
+            action="loan.return_to_pending", entity=loan,
+            before={"status": before},
+            after={"status": loan.status, "reason": reason},
+        )
+    return loan
+
+
 def revert_disbursement(loan, *, reason="", actor=None):
     """Put a loan back to APPROVED after its payment failed.
 
