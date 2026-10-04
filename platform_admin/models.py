@@ -598,14 +598,25 @@ class SiteContent(TimeStampedModel):
     principle_eyebrow = models.CharField(
         max_length=80, default="Our core principle")
     principle_title = models.CharField(
-        max_length=120, default="Ledger, not custodian.")
+        max_length=120, default="Every naira, traceable.")
+    # This band used to be about custody — first claiming we never hold member
+    # funds (which the disbursement wallet made untrue), then explaining the
+    # wallet. Neither belongs in a marketing headline: the first was false and
+    # the second foregrounds an edge case that only applies to societies
+    # choosing to lend electronically.
+    #
+    # It now says what is true of every society without making a claim either
+    # way about custody. The wallet is still disclosed, but where it matters:
+    # in the Fund wallet flow (the moment an officer decides to deposit), the
+    # officer Guide, and the policy documents. Do not reintroduce a "we never
+    # hold funds" line here — that is the sentence that became false.
     principle_body = models.TextField(
-        default="Money moves through licensed payment providers into your "
-                "cooperative's own bank account. We record, reconcile and "
-                "report "
-                "on it — we never hold member funds in a platform wallet. "
-                "That is a deliberate engineering and regulatory choice, and "
-                "it is why your money never depends on us staying solvent.",
+        default="Contributions settle through licensed payment providers "
+                "straight into your cooperative's own bank account. Every "
+                "movement is recorded in an append-only double-entry ledger — "
+                "nothing is edited or deleted, corrections are posted as "
+                "reversals, and your auditor can follow any figure back to the "
+                "entry that produced it.",
     )
 
     # ── Section headings ────────────────────────────────────────────────────
@@ -889,3 +900,57 @@ class SiteShowcase(SiteSectionItem):
         """``bullets`` split into lines, blanks dropped."""
         return [line.strip() for line in self.bullets.splitlines()
                 if line.strip()]
+
+
+class LegalDocument(TimeStampedModel):
+    """A policy page written by someone qualified and pasted in here.
+
+    Privacy notice, terms of service, a funds/custody disclosure — anything a
+    lawyer drafts and the platform has to publish. Kept in the database rather
+    than in code so updating a policy is an admin task, not a deployment.
+
+    ``published`` defaults to **False** deliberately: a half-pasted draft must
+    not appear on the public site, and a policy is usually pasted in stages.
+
+    The site keeps working before any row exists. ``/privacy`` falls back to the
+    notice built into the frontend, which matters because that URL is already
+    registered with Google Play — it must never go blank waiting for legal copy.
+    """
+
+    SLUG_HELP = (
+        "URL segment: the page is served at /&lt;slug&gt;. Two slugs are wired to "
+        "routes and must keep their exact spelling — <b>privacy</b> and "
+        "<b>terms</b>. The privacy one is registered with Google Play, so "
+        "renaming it breaks the store listing."
+    )
+    BODY_HELP = (
+        "Paste the drafted text. Formatting understood: a blank line starts a "
+        "new paragraph, <code>## </code> a heading, <code>### </code> a "
+        "sub-heading, <code>- </code> a bullet, <code>**bold**</code> for bold, "
+        "and <code>[text](https://…)</code> for a link. Anything else appears "
+        "as written — HTML is not interpreted, so tags would show as text."
+    )
+
+    slug = models.SlugField(max_length=60, unique=True, help_text=SLUG_HELP)
+    title = models.CharField(
+        max_length=200,
+        help_text="Shown as the page heading and in the footer link.")
+    body = models.TextField(help_text=BODY_HELP)
+    effective_date = models.DateField(
+        null=True, blank=True,
+        help_text="Shown under the title as the date the policy takes effect. "
+                  "Leave blank to show nothing.")
+    published = models.BooleanField(
+        default=False,
+        help_text="Off until the text is complete. An unpublished document is "
+                  "invisible to visitors and absent from the footer.")
+    order = models.PositiveIntegerField(
+        default=0, help_text="Order in the footer. Lower numbers first.")
+
+    class Meta:
+        ordering = ["order", "title"]
+        verbose_name = "Legal / policy document"
+        verbose_name_plural = "Legal / policy documents"
+
+    def __str__(self) -> str:
+        return f"{self.title} (/{self.slug})"

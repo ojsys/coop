@@ -133,8 +133,25 @@ def _money(value) -> str:
 # --------------------------------------------------------------------------- #
 # Approve / disburse
 # --------------------------------------------------------------------------- #
-def approve_loan(loan, *, actor=None, approve=True):
+def approve_loan(loan, *, actor=None, approve=True, auto_disburse=True):
+    """Approve or reject a loan, and pay it out where that is possible.
+
+    Approving sends the money immediately — the point of the whole payout
+    rail — but only when it actually can: the loan needs a bank code and
+    account number on its snapshot, and the disbursement wallet needs to cover
+    the principal. When either is missing the loan stays APPROVED for the cash
+    path, and the officer is told which it was rather than left wondering why
+    nothing moved.
+
+    Two transient attributes are set on the returned loan for the caller to
+    report: ``auto_disbursement`` (the Payout, when one was sent) and
+    ``auto_disbursement_error`` (why not). They are deliberately not model
+    fields — the Payout record and the ledger are the durable history, and a
+    status column that could disagree with them would be a second source of
+    truth about whether money moved.
+    """
     from loans.models import Loan
+
     if loan.status != Loan.Status.PENDING:
         raise LoanError("Only a pending loan can be approved or rejected.")
     loan.status = Loan.Status.APPROVED if approve else Loan.Status.REJECTED
@@ -142,6 +159,29 @@ def approve_loan(loan, *, actor=None, approve=True):
     loan.decided_at = timezone.now()
     loan.save(update_fields=["status", "decided_by", "decided_at", "updated_at"])
     _notify_decision(loan, approve)
+
+    loan.auto_disbursement = None
+    loan.auto_disbursement_error = None
+    if not (approve and auto_disburse):
+        return loan
+
+    from payments.providers import PaymentInitError
+    from payments.services import PayoutError
+
+    try:
+        loan.auto_disbursement = disburse_loan_electronically(loan, actor=actor)
+    except (LoanError, PayoutError, PaymentInitError) as exc:
+        # Left APPROVED on purpose: the loan is still good, it just has to be
+        # paid another way. Officers are told, because an approved loan nobody
+        # noticed could not be paid is how a member ends up waiting silently.
+        loan.auto_disbursement_error = str(exc)
+        _notify_officers(
+            loan.cooperative,
+            title="Loan approved but not yet paid",
+            body=(f"Loan {loan.id} for {loan.membership.user.full_name} was "
+                  f"approved but could not be paid out automatically:\n\n"
+                  f"{exc}\n\nIt is waiting as an approved loan."),
+        )
     return loan
 
 
@@ -199,12 +239,108 @@ def disburse_loan(loan, *, actor=None, from_account_code="1000"):
         ],
         memo=f"Loan {loan.id} disbursement", created_by=actor)
 
+    _finalise_disbursement(loan)
+    return journal
+
+
+def _finalise_disbursement(loan):
+    """Mark a loan disbursed, build its schedule and tell the member.
+
+    Shared by both disbursement paths so they cannot drift: cash posts its own
+    journal crediting Cash, electronic posts one crediting the wallet, and
+    everything *after* the money moves is identical.
+    """
+    from loans.models import Loan
+
     loan.status = Loan.Status.DISBURSED
     loan.disbursed_at = timezone.now()
     loan.save(update_fields=["status", "disbursed_at", "updated_at"])
     build_schedule(loan)
     _notify_disbursed(loan)
-    return journal
+    return loan
+
+
+@transaction.atomic
+def revert_disbursement(loan, *, reason="", actor=None):
+    """Put a loan back to APPROVED after its payment failed.
+
+    Called when the provider tells us a transfer failed or was reversed. The
+    money is returned to the wallet by reversing the payout's journal; this
+    undoes the *loan* side so the two stay consistent.
+
+    The repayment schedule is deleted rather than kept: its dates are derived
+    from ``disbursed_at``, so a schedule for a disbursement that never happened
+    would start generating arrears for money the member never received.
+    """
+    from loans.models import Loan, RepaymentInstalment
+
+    if loan.status != Loan.Status.DISBURSED:
+        return loan
+
+    loan.status = Loan.Status.APPROVED
+    loan.disbursed_at = None
+    loan.save(update_fields=["status", "disbursed_at", "updated_at"])
+    RepaymentInstalment.all_objects.filter(loan=loan).delete()
+
+    _notify_officers(
+        loan.cooperative,
+        title="Loan payment failed",
+        body=(f"The payment for loan {loan.id} to "
+              f"{loan.membership.user.full_name} did not go through"
+              f"{(': ' + reason) if reason else '.'}\n\n"
+              f"The money has been returned to the disbursement wallet and the "
+              f"loan is approved again, waiting to be paid."),
+    )
+    return loan
+
+
+@transaction.atomic
+def disburse_loan_electronically(loan, *, actor=None):
+    """Pay an approved loan to the member's bank, drawing on the wallet.
+
+    Posts **no journal of its own**: send_payout writes the disbursement entry
+    (debit 1200 Loans Receivable, credit 1020 Disbursement Wallet), and that
+    *is* the disbursement. A second journal here would book the principal twice.
+
+    The destination comes from the loan's own snapshot, not from the member's
+    current record, so a bank-detail edit after approval cannot redirect it.
+
+    The loan is marked disbursed once the provider accepts the transfer, which
+    is also when the wallet is debited. A transfer can still fail afterwards;
+    that reverses the journal and returns the loan to approved.
+    """
+    from ledger.models import Account
+    from loans.models import Loan
+    from payments.models import Payout
+    from payments.services import send_payout
+
+    if loan.status != Loan.Status.APPROVED:
+        raise LoanError("Only an approved loan can be disbursed.")
+    if not loan.destination_is_payable:
+        raise LoanError(
+            "This loan has no bank code and account number recorded, so it "
+            "cannot be paid electronically. Disburse it in cash instead, or ask "
+            "the member to re-pick their bank from the list."
+        )
+
+    receivable = _account(loan.cooperative, "1200", "Loans Receivable",
+                          Account.Kind.ASSET)
+    payout = send_payout(
+        cooperative=loan.cooperative,
+        amount=loan.principal,
+        debit_account=receivable,
+        kind=Payout.Kind.LOAN,
+        object_id=loan.id,
+        membership=loan.membership,
+        destination_bank_name=loan.destination_bank_name,
+        destination_bank_code=loan.destination_bank_code,
+        destination_account_no=loan.destination_account_no,
+        account_name=loan.membership.user.full_name,
+        reason=f"Loan {loan.id} disbursement",
+        actor=actor,
+    )
+    _finalise_disbursement(loan)
+    return payout
 
 
 # --------------------------------------------------------------------------- #

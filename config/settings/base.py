@@ -133,6 +133,21 @@ PAYSTACK_CALLBACK_URL = os.environ.get('PAYSTACK_CALLBACK_URL', '')
 PAYSTACK_USE_SUBACCOUNT = (
     os.environ.get('PAYSTACK_USE_SUBACCOUNT', 'false').lower() == 'true'
 )
+# The percentage_charge set on each cooperative's Paystack subaccount.
+#
+# Deliberately 0, and deliberately configurable rather than hard-coded. Paystack
+# documents this field as the split percentage on a subaccount, but which side
+# of the split it names — the main account's cut or the subaccount's share — is
+# not stated unambiguously enough to encode as money maths here. At 0 the
+# reading does not matter: no split charge is applied either way, and the
+# society receives its settlement net only of Paystack's own transaction fees.
+#
+# Platform revenue comes from subscriptions (see Plan/Subscription/Invoice), not
+# from a cut of members' contributions. Confirm the semantics against Paystack's
+# current documentation before setting this to anything else.
+PAYSTACK_SUBACCOUNT_PERCENTAGE = float(
+    os.environ.get('PAYSTACK_SUBACCOUNT_PERCENTAGE', '0')
+)
 FLUTTERWAVE_SECRET_HASH = os.environ.get(
     'FLUTTERWAVE_SECRET_HASH', 'flw_test_hash',
 )

@@ -162,6 +162,15 @@ class Membership(TenantScopedModel, TimeStampedModel):
     next_of_kin_name = models.CharField(max_length=200, blank=True)
     next_of_kin_phone = models.CharField(max_length=20, blank=True)
     bank_name = models.CharField(max_length=120, blank=True)
+    # Paystack's code for the bank above. A transfer recipient cannot be
+    # created from a bank *name* — the API takes a code — so without this no
+    # loan can be disbursed and no withdrawal paid out electronically.
+    # Blank on every row written before bank selection existed: the member or
+    # an officer picks the bank from the list once and it fills in. Kept
+    # separate from bank_name rather than replacing it, so an existing record
+    # stays readable and a half-migrated row is obvious rather than silently
+    # wrong.
+    bank_code = models.CharField(max_length=10, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
 
     class Meta:

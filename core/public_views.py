@@ -107,6 +107,44 @@ class PublicReferenceView(PublicView):
         })
 
 
+class PublicLegalIndexView(PublicView):
+    """`GET /public/legal/` — the published policy pages, for footer links."""
+
+    def get(self, request):
+        from platform_admin.models import LegalDocument
+
+        return Response({
+            "documents": [
+                {"slug": doc.slug, "title": doc.title}
+                for doc in LegalDocument.objects.filter(published=True)
+            ],
+        })
+
+
+class PublicLegalDocumentView(PublicView):
+    """`GET /public/legal/<slug>/` — one policy page.
+
+    404 for an unpublished or absent document rather than an empty page, so the
+    frontend can fall back to its built-in notice. That fallback is why the
+    Google Play privacy URL keeps working before any legal copy is pasted in.
+    """
+
+    def get(self, request, slug):
+        from platform_admin.models import LegalDocument
+
+        doc = LegalDocument.objects.filter(slug=slug, published=True).first()
+        if doc is None:
+            return Response({"detail": "No published document at that slug."},
+                            status=404)
+        return Response({
+            "slug": doc.slug,
+            "title": doc.title,
+            "body": doc.body,
+            "effective_date": doc.effective_date,
+            "updated_at": doc.updated_at,
+        })
+
+
 class PublicSiteContentView(PublicView):
     """`GET /public/site-content/` — the editable copy and imagery.
 

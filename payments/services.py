@@ -31,6 +31,629 @@ class WebhookError(Exception):
     pass
 
 
+class SubaccountError(Exception):
+    """A cooperative's settlement subaccount could not be created."""
+
+
+class WalletError(Exception):
+    """A wallet top-up could not be initiated or confirmed."""
+
+
+class PayoutError(Exception):
+    """Money could not be sent out."""
+
+
+# ── What the provider says actually happened ─────────────────────────────────
+# A transfer being *accepted* is not the same as it settling. Paystack can fail
+# or reverse one afterwards, and its webhook can be missed or delayed — so a
+# payout is never trusted once. Two things ask the provider: the webhook below,
+# and an officer's explicit recheck. Both funnel through
+# ``_apply_transfer_status`` so they cannot disagree.
+
+_FINAL_STATUSES = ("success", "failed", "reversed")
+
+
+@transaction.atomic
+def _apply_transfer_status(payout, reported, *, raw=None, actor=None):
+    """Move a payout to what the provider reports, compensating on failure.
+
+    Idempotent, and deliberately so: Paystack resends webhooks, an officer may
+    recheck twice, and a webhook may arrive while a recheck is in flight. A
+    payout that has already reached a final state only records the newer payload
+    and returns.
+
+    On failure the wallet is made whole by reversing the payout's journal — the
+    wallet was debited when the transfer was initiated, not when it settled —
+    and the thing being paid for is put back too (see _compensate).
+    """
+    from django.utils import timezone
+
+    from audit.services import record_action
+    from ledger.services import reverse_journal
+    from payments.models import Payout
+
+    reported = (reported or "").strip().lower()
+    if raw is not None:
+        payout.payload = raw
+
+    if payout.status in (Payout.Status.SUCCESS, Payout.Status.FAILED,
+                         Payout.Status.REVERSED):
+        # Already final. Record what we were told and leave it alone — never
+        # reverse twice, never un-fail something.
+        payout.save(update_fields=["payload", "updated_at"])
+        return payout
+
+    if reported == "success":
+        payout.status = Payout.Status.SUCCESS
+        payout.settled_at = timezone.now()
+        payout.save(update_fields=["status", "settled_at", "payload",
+                                   "updated_at"])
+        record_action(
+            cooperative=payout.cooperative, actor=actor,
+            actor_label="" if actor else "System",
+            action="payment.payout_settled", entity=payout,
+            after={"reference": payout.reference, "amount": str(payout.amount)},
+        )
+        return payout
+
+    if reported in ("failed", "reversed"):
+        if payout.journal_id and not payout.reversal_journal_id:
+            payout.reversal_journal = reverse_journal(
+                payout.journal, created_by=actor,
+                memo=f"Payout {payout.reference} {reported}")
+        payout.status = (Payout.Status.REVERSED if reported == "reversed"
+                         else Payout.Status.FAILED)
+        payout.failure_reason = (
+            str((raw or {}).get("message") or (raw or {}).get("gateway_response")
+                or reported)[:255])
+        payout.save(update_fields=["status", "reversal_journal",
+                                   "failure_reason", "payload", "updated_at"])
+        _compensate(payout, actor=actor)
+        record_action(
+            cooperative=payout.cooperative, actor=actor,
+            actor_label="" if actor else "System",
+            action="payment.payout_failed", entity=payout,
+            after={"reference": payout.reference, "status": payout.status,
+                   "reason": payout.failure_reason},
+        )
+        return payout
+
+    # Still in flight (pending / otherwise). Record the payload, change nothing.
+    payout.save(update_fields=["payload", "updated_at"])
+    return payout
+
+
+def _compensate(payout, *, actor=None):
+    """Undo whatever the failed payout was paying for.
+
+    Reversing the journal returns the money to the wallet, but the *thing* being
+    paid also has to go back: a loan marked disbursed when no money arrived
+    would start accruing a repayment schedule against a member who received
+    nothing. A wallet withdrawal needs nothing beyond the reversal — the funds
+    simply never left.
+    """
+    from payments.models import Payout
+
+    if payout.kind != Payout.Kind.LOAN or not payout.object_id:
+        return
+
+    from loans.models import Loan
+    from loans.services import revert_disbursement
+
+    loan = Loan.all_objects.filter(pk=payout.object_id).first()
+    if loan is not None:
+        revert_disbursement(loan, reason=payout.failure_reason, actor=actor)
+
+
+def handle_transfer_event(*, provider_name, payload):
+    """Apply an inbound ``transfer.*`` webhook to its payout.
+
+    Branched out of ``ingest_webhook`` before normalisation because the inbound
+    path cannot describe this: ``normalize`` sets ``success`` only for
+    ``charge.success`` and routes to a tenant by settlement subaccount, and a
+    transfer has neither. Forced through it, every transfer webhook would be
+    filed as "non-success event, ignored".
+    """
+    from payments.models import PaymentEvent, Payout
+
+    data = payload.get("data") or {}
+    reference = str(data.get("reference") or "")
+    payout = (Payout.all_objects
+              .filter(provider=provider_name, reference=reference).first()
+              if reference else None)
+
+    if payout is None:
+        # Recorded rather than dropped: a transfer we cannot match is exactly
+        # the kind of thing someone needs to find later.
+        from decimal import Decimal
+
+        event_id = str(data.get("id") or reference or "unknown")
+        existing = PaymentEvent.all_objects.filter(
+            provider=provider_name, event_id=event_id).first()
+        if existing is not None:
+            return existing
+        return PaymentEvent.all_objects.create(
+            provider=provider_name, event_id=event_id, reference=reference,
+            amount=(Decimal(str(data.get("amount", 0))) / Decimal("100")),
+            status=PaymentEvent.Status.UNMATCHED,
+            note="Transfer webhook matches no payout on this platform.",
+            payload=payload,
+        )
+
+    return _apply_transfer_status(
+        payout,
+        data.get("status") or payload.get("event", "").split(".")[-1],
+        raw=data,
+    )
+
+
+def recheck_payout(payout, *, actor=None):
+    """Ask the provider what really happened to a payout.
+
+    This is the answer to "it still says pending but the money has gone". A
+    webhook can be missed or delayed; this asks directly and reconciles, using
+    the same code path as the webhook so the two cannot disagree.
+
+    Returns the payout unchanged when the provider has nothing to say about the
+    reference — including on the dev placeholder key, where there is no live
+    provider to ask.
+    """
+    detail = get_provider(payout.provider).fetch_transfer(payout.reference)
+    if detail is None:
+        return payout
+    return _apply_transfer_status(payout, detail.get("status"),
+                                  raw=detail.get("raw"), actor=actor)
+
+
+@transaction.atomic
+def withdraw_wallet(cooperative, *, amount, actor=None, reason=""):
+    """Send money from the disbursement wallet back to the society's own bank.
+
+    This is the promise the wallet rests on: the float a society deposits is its
+    own money, and it can take it back. Without this the platform would be a
+    one-way door, and the public wording about holding only a withdrawable float
+    would not be true.
+
+    One privileged officer, not maker-checker, and the reasoning matters: the
+    only possible destination is the society's *own* collection account, which
+    already took two officers to set (see
+    tenants.services.propose_bank_detail_change). A single officer can therefore
+    move the society's money to the society's own bank and nowhere else — the
+    dual control is on the destination, not on this transfer. It also matches
+    the rule used throughout: approval is for money *leaving* the cooperative,
+    and this is money coming back.
+    """
+    from payments.models import Payout
+
+    if not (cooperative.bank_code and cooperative.bank_account_no):
+        raise PayoutError(
+            "This cooperative has no bank code and account number on file, so "
+            "there is nowhere to withdraw to. Add them under Settings \u2192 "
+            "Collection account \u2014 a second officer approves the change."
+        )
+
+    # Money returns to the society's own bank, so the asset it lands in is 1010
+    # Bank / PSP Settlement. The wallet (1020) is credited by send_payout.
+    _, _, settlement = _wallet_accounts(cooperative)
+
+    return send_payout(
+        cooperative=cooperative,
+        amount=amount,
+        debit_account=settlement,
+        kind=Payout.Kind.WALLET_WITHDRAWAL,
+        destination_bank_name=cooperative.bank_name,
+        destination_bank_code=cooperative.bank_code,
+        destination_account_no=cooperative.bank_account_no,
+        account_name=cooperative.bank_account_name or cooperative.name,
+        reason=reason or "Disbursement wallet withdrawal",
+        actor=actor,
+    )
+
+
+@transaction.atomic
+def send_payout(*, cooperative, amount, debit_account, kind, object_id=None,
+                destination_bank_name="", destination_bank_code="",
+                destination_account_no="", account_name="", reason="",
+                actor=None, membership=None,
+                provider_name=Provider.PAYSTACK):
+    """Send money out of the society's disbursement wallet. Returns the Payout.
+
+    Every outbound payment goes through here — a loan disbursement, a society
+    withdrawing its own wallet, later a savings payout — so the wallet check,
+    the ledger posting and the audit trail cannot be forgotten by one caller.
+
+    The journal is posted **when the transfer is initiated**, not when it
+    settles:
+
+        debit  <debit_account>              amount
+        credit 1020 Disbursement Wallet     amount
+
+    If the wallet were only debited on success, two payouts could each pass the
+    balance check and together overdraw the real balance at the provider. A
+    later failure reverses this journal rather than preventing it.
+
+    Everything happens in one transaction with the provider call inside it, so a
+    rejection rolls back cleanly and leaves no orphan journal. The residual
+    risk is the reverse: the provider accepts and a local write then fails,
+    leaving money gone with no record. That is exactly what the recheck action
+    exists to find, and why ``reference`` is the provider's idempotency key.
+    """
+    from decimal import Decimal, InvalidOperation
+
+    from django.utils import timezone
+
+    from audit.services import record_action
+    from ledger.services import Line, post_journal
+    from payments.models import Payout
+
+    try:
+        amount = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    except (InvalidOperation, TypeError) as exc:
+        raise PayoutError("Enter a valid amount.") from exc
+    if amount <= Decimal("0"):
+        raise PayoutError("A payout amount must be positive.")
+
+    if not (destination_bank_code and destination_account_no):
+        raise PayoutError(
+            "This payout has no bank code and account number on file, so it "
+            "cannot be sent electronically. Ask for the bank to be re-picked "
+            "from the list, or pay it in cash."
+        )
+
+    available = wallet_balance(cooperative)
+    if amount > available:
+        raise PayoutError(
+            f"The disbursement wallet holds {available:,.2f}, so {amount:,.2f} "
+            f"cannot be sent. Fund the wallet first."
+        )
+
+    wallet, _, _ = _wallet_accounts(cooperative)
+    if debit_account.cooperative_id != cooperative.id:
+        raise PayoutError("That account belongs to another cooperative.")
+
+    import secrets
+
+    reference = f"PO-{cooperative.id}-{secrets.token_hex(6).upper()}"
+    payout = Payout.all_objects.create(
+        cooperative=cooperative,
+        kind=kind,
+        object_id=object_id,
+        amount=amount,
+        status=Payout.Status.QUEUED,
+        destination_bank_name=destination_bank_name,
+        destination_bank_code=destination_bank_code,
+        destination_account_no=destination_account_no,
+        destination_account_name=account_name,
+        provider=provider_name,
+        reference=reference,
+        reason=reason,
+        requested_by=actor,
+    )
+
+    provider = get_provider(provider_name)
+    recipient = provider.create_transfer_recipient(
+        name=account_name or destination_account_no,
+        account_number=destination_account_no,
+        bank_code=destination_bank_code,
+    )
+    result = provider.initiate_transfer(
+        amount=amount, recipient_code=recipient, reference=reference,
+        reason=reason,
+    )
+
+    journal = post_journal(
+        cooperative=cooperative,
+        reference=reference,
+        memo=reason or f"{payout.get_kind_display()} {reference}",
+        created_by=actor,
+        lines=[
+            # `membership` matters: the member statement is built from ledger
+            # entries tagged with it, so a loan disbursed electronically would
+            # be missing from the borrower's own statement without this, while
+            # a cash one appeared.
+            Line(account=debit_account, debit=amount, membership=membership,
+                 description=reason or ""),
+            Line(account=wallet, credit=amount,
+                 description=f"Payout {reference}"),
+        ],
+    )
+
+    reported = (result.get("status") or "pending").lower()
+    payout.recipient_code = recipient or ""
+    payout.transfer_code = result.get("transfer_code") or ""
+    payout.payload = result.get("raw") or {}
+    payout.journal = journal
+    payout.sent_at = timezone.now()
+    # "success" from the provider means *accepted*, and for a simulated dev
+    # transfer it means nothing left at all. Either way a transfer can still
+    # fail or reverse afterwards, so it is recorded as settled only when the
+    # provider says so, and rechecked rather than trusted.
+    if reported == "success":
+        payout.status = Payout.Status.SUCCESS
+        payout.settled_at = timezone.now()
+    elif reported in ("failed", "reversed"):
+        payout.status = Payout.Status.FAILED
+        payout.failure_reason = str(result.get("raw") or "")[:255]
+    else:
+        payout.status = Payout.Status.PENDING
+    payout.save()
+
+    record_action(
+        cooperative=cooperative, actor=actor,
+        action="payment.payout_sent", entity=payout,
+        after={"reference": reference, "amount": str(amount),
+               "kind": kind, "status": payout.status,
+               "destination": payout.describe()},
+    )
+    return payout
+
+
+# ── The disbursement wallet ─────────────────────────────────────────────────
+# Money a society deliberately deposits with the platform so it can lend
+# electronically. It is the only money the platform holds: collections settle to
+# each society's own bank through its subaccount (see ensure_subaccount), and
+# this balance is the society's own.
+#
+# The balance is *derived* from the ledger, never stored — the same rule the
+# rest of this project follows. There is no field to drift out of step.
+
+WALLET_ACCOUNT_CODE = "1020"
+CHARGES_ACCOUNT_CODE = "5000"
+
+
+def _wallet_accounts(cooperative):
+    """The three accounts a top-up touches, created on first use.
+
+    Lazily get-or-created rather than assumed, because societies provisioned
+    before 1020/5000 joined the baseline chart do not have them. Same approach
+    as loans.services._account for 1200 Loans Receivable.
+    """
+    from ledger.models import Account
+
+    def account(code, name, kind):
+        obj, _ = Account.all_objects.get_or_create(
+            cooperative=cooperative, code=code,
+            defaults={"name": name, "kind": kind, "system": True})
+        return obj
+
+    return (
+        account(WALLET_ACCOUNT_CODE, "Disbursement Wallet",
+                Account.Kind.ASSET),
+        account(CHARGES_ACCOUNT_CODE, "Payment Charges",
+                Account.Kind.EXPENSE),
+        account("1010", "Bank / PSP Settlement", Account.Kind.ASSET),
+    )
+
+
+def wallet_account(cooperative):
+    """The society's disbursement wallet account."""
+    wallet, _, _ = _wallet_accounts(cooperative)
+    return wallet
+
+
+def wallet_balance(cooperative):
+    """What the society can currently disburse, derived from the ledger.
+
+    Quantised to two places because the figure is money and is serialised
+    straight into API responses. Decimal keeps whatever scale the arithmetic
+    produced, so without this the same endpoint returns "49250.00" after one
+    top-up and "150000" after a round-numbered payout — the balance looking
+    like a different kind of value depending on the history behind it.
+    """
+    from decimal import Decimal
+
+    from ledger.services import account_balance
+
+    return account_balance(wallet_account(cooperative)).quantize(
+        Decimal("0.01"))
+
+
+def initiate_wallet_topup(cooperative, *, amount, email, actor=None,
+                          callback_url=None):
+    """Start a checkout that funds the society's disbursement wallet.
+
+    Returns ``(topup, authorization_url)``. The url is ``None`` when no live key
+    is configured, exactly as the contribution flow behaves.
+
+    Nothing is posted yet: like a contribution, the journal is written only when
+    the charge is confirmed, because until then no money has moved.
+
+    **No subaccount is sent, deliberately.** Every other checkout in this
+    project routes settlement to the society's own subaccount; doing that here
+    would send the society's money straight back to its own bank instead of the
+    platform balance the wallet represents — funding nothing.
+    """
+    import secrets
+    from decimal import Decimal, InvalidOperation
+
+    from payments.models import WalletTopUp
+
+    try:
+        amount = amount if isinstance(amount, Decimal) else Decimal(str(amount))
+    except (InvalidOperation, TypeError) as exc:
+        raise WalletError("Enter a valid amount.") from exc
+    if amount <= Decimal("0"):
+        raise WalletError("A top-up amount must be positive.")
+
+    reference = f"WLT-{cooperative.id}-{secrets.token_hex(6).upper()}"
+    topup = WalletTopUp.all_objects.create(
+        cooperative=cooperative,
+        amount=amount,
+        psp_reference=reference,
+        initiated_by=actor,
+    )
+
+    provider = get_provider(Provider.PAYSTACK)
+    url = provider.initialize_transaction(
+        email=email,
+        amount=amount,
+        reference=reference,
+        subaccount_code=None,   # see the docstring — this must stay None
+        callback_url=callback_url or (settings.PAYSTACK_CALLBACK_URL or None),
+    )
+    return topup, url
+
+
+@transaction.atomic
+def confirm_wallet_topup(cooperative, reference, *, actor=None):
+    """Confirm a top-up against the provider and credit the wallet. Idempotent.
+
+    Books three legs, because the society pays the gross and the platform
+    balance receives the gross *less the provider's fee*:
+
+        debit  1020 Disbursement Wallet    net
+        debit  5000 Payment Charges        fee
+        credit 1010 Bank / PSP Settlement  gross
+
+    The fee is read from the provider rather than estimated. Crediting the
+    wallet with the gross would claim money that never arrived, and the first
+    disbursement would fail at the provider for insufficient funds — a failure
+    that would surface as a broken loan payout, far from its cause.
+
+    Returns the top-up unchanged when the charge did not succeed, so a cancelled
+    checkout leaves a PENDING record and no ledger entry.
+    """
+    from decimal import Decimal
+
+    from django.utils import timezone
+
+    from audit.services import record_action
+    from ledger.services import Line, post_journal
+    from payments.models import WalletTopUp
+
+    topup = WalletTopUp.all_objects.filter(
+        cooperative=cooperative, psp_reference=reference).first()
+    if topup is None:
+        return None
+    if topup.is_confirmed:
+        return topup
+
+    detail = get_provider(topup.provider).fetch_transaction(reference)
+    if detail is None or not detail.get("success"):
+        return topup
+
+    gross = detail.get("amount") or topup.amount
+    fee = detail.get("fee") or Decimal("0.00")
+    net = gross - fee
+    if net <= Decimal("0"):
+        raise WalletError(
+            f"The provider's fee ({fee}) is not less than the amount paid "
+            f"({gross}), so there is nothing to credit.")
+
+    wallet, charges, settlement = _wallet_accounts(cooperative)
+    lines = [
+        Line(account=wallet, debit=net, description="Wallet funded"),
+        Line(account=settlement, credit=gross,
+             description=f"Top-up {reference}"),
+    ]
+    if fee > Decimal("0"):
+        lines.insert(1, Line(account=charges, debit=fee,
+                             description="Payment provider fee"))
+
+    journal = post_journal(
+        cooperative=cooperative,
+        reference=f"WLT-{topup.pk}",
+        memo=f"Disbursement wallet top-up {reference}",
+        created_by=actor or topup.initiated_by,
+        lines=lines,
+    )
+
+    topup.fee = fee
+    topup.net_amount = net
+    topup.journal = journal
+    topup.status = WalletTopUp.Status.CONFIRMED
+    topup.confirmed_at = timezone.now()
+    topup.save(update_fields=["fee", "net_amount", "journal", "status",
+                              "confirmed_at", "updated_at"])
+
+    record_action(
+        cooperative=cooperative, actor=actor or topup.initiated_by,
+        action="wallet.topup_confirmed", entity=topup,
+        after={"amount": str(gross), "fee": str(fee), "net": str(net),
+               "reference": reference},
+    )
+    return topup
+
+
+@transaction.atomic
+def ensure_subaccount(cooperative, *, actor=None,
+                      provider_name=Provider.PAYSTACK):
+    """Create the cooperative's settlement subaccount, or return the existing one.
+
+    Returns ``(provider_account, created)``. Idempotent: a society that already
+    has a connected account gets it back untouched and the provider is never
+    called again, so a double-clicked button cannot create two subaccounts.
+
+    Requires the bank **code**, not just the name — Paystack identifies the
+    settlement bank by code, and a name alone cannot create a subaccount. For
+    societies whose bank details predate bank selection the code is blank, so
+    this refuses and names what is missing rather than failing at the provider.
+
+    Nothing about collections changes until ``PAYSTACK_USE_SUBACCOUNT`` is on:
+    ``initialize_payment`` looks up a connected account only then, and falls
+    back to the platform account when there is none. So creating a subaccount
+    is safe to do per-society, ahead of flipping that switch.
+    """
+    from audit.services import record_action
+
+    existing = (
+        ProviderAccount.all_objects
+        .filter(cooperative=cooperative, provider=provider_name,
+                connected=True)
+        .first()
+    )
+    if existing is not None:
+        return existing, False
+
+    missing = [
+        label for label, value in (
+            ("bank name", cooperative.bank_name),
+            ("bank code", cooperative.bank_code),
+            ("account number", cooperative.bank_account_no),
+        ) if not value
+    ]
+    if missing:
+        raise SubaccountError(
+            "This cooperative's bank details are incomplete — missing "
+            f"{', '.join(missing)}. Add them under Settings → Collection "
+            "account (a second officer approves the change), then connect the "
+            "settlement account."
+        )
+
+    code = get_provider(provider_name).create_subaccount(
+        business_name=cooperative.bank_account_name or cooperative.name,
+        bank_code=cooperative.bank_code,
+        account_number=cooperative.bank_account_no,
+        percentage_charge=settings.PAYSTACK_SUBACCOUNT_PERCENTAGE,
+    )
+    if not code:
+        # No live key: returning None here is "not configured", not "failed".
+        # Recording a row with no real subaccount behind it would tell the
+        # society its collections settle to its own bank when they do not.
+        raise SubaccountError(
+            "No live payment-provider key is configured, so no subaccount was "
+            "created. Collections continue settling to the platform account "
+            "until this is run against a live key."
+        )
+
+    account = ProviderAccount.all_objects.create(
+        cooperative=cooperative,
+        provider=provider_name,
+        subaccount_code=code,
+        bank_name=cooperative.bank_name,
+        connected=True,
+    )
+    record_action(
+        cooperative=cooperative, actor=actor,
+        action="cooperative.subaccount_connected", entity=account,
+        actor_label="" if actor else "System",
+        after={"provider": provider_name, "subaccount_code": code,
+               "bank_name": cooperative.bank_name,
+               "bank_code": cooperative.bank_code},
+    )
+    return account, True
+
+
 def initialize_payment(contribution, *, email, callback_url=None):
     """Start a Paystack checkout for a PENDING contribution.
 
@@ -200,6 +823,15 @@ def ingest_webhook(*, provider_name: str, raw_body: bytes, headers) -> PaymentEv
     provider.verify(raw_body, headers)  # raises on tamper
 
     payload = json.loads(raw_body.decode() or "{}")
+
+    # Outbound transfers take a different path entirely: normalize() below only
+    # recognises charge.success and routes to a tenant by settlement subaccount,
+    # neither of which a transfer has. Handled before that, not squeezed through
+    # it.
+    if str(payload.get("event", "")).startswith("transfer."):
+        return handle_transfer_event(provider_name=provider_name,
+                                     payload=payload)
+
     event = provider.normalize(payload)
 
     # Idempotency — a replayed event returns the original record untouched.

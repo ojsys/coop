@@ -94,6 +94,9 @@ class LoanSerializer(serializers.ModelSerializer):
     instalments = RepaymentInstalmentSerializer(many=True, read_only=True)
     # The society's own account, so a member can repay by direct transfer.
     coop_bank = serializers.SerializerMethodField()
+    destination_summary = serializers.CharField(source="describe_destination",
+                                                read_only=True)
+    destination_is_payable = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Loan
@@ -104,8 +107,19 @@ class LoanSerializer(serializers.ModelSerializer):
                   "interest_rate", "term_months", "purpose", "status",
                   "status_display", "interest", "total_repayable", "outstanding",
                   "repaid_amount", "monthly_instalment", "disbursed_at",
-                  "repayments", "instalments", "coop_bank", "created_at"]
-        read_only_fields = ["status", "interest_rate", "disbursed_at"]
+                  "repayments", "instalments", "coop_bank",
+                  # Where the payout will go, frozen at application. Shown
+                  # alongside member_bank_* on purpose: if the two differ, the
+                  # member changed their details after applying and the officer
+                  # should see that before approving.
+                  "destination_bank_name", "destination_bank_code",
+                  "destination_account_no", "destination_summary",
+                  "destination_is_payable", "created_at"]
+        # The destination is never client-supplied: accepting one would let an
+        # applicant name the account their own loan is paid into.
+        read_only_fields = ["status", "interest_rate", "disbursed_at",
+                            "destination_bank_name", "destination_bank_code",
+                            "destination_account_no"]
 
     def get_member_photo(self, obj):
         """A signed, expiring URL for the member's photograph.
@@ -141,4 +155,19 @@ class LoanSerializer(serializers.ModelSerializer):
         # Snapshot the product's interest rate onto the loan at application.
         validated_data.setdefault("interest_rate",
                                   validated_data["product"].interest_rate)
-        return super().create(validated_data)
+        loan = super().create(validated_data)
+
+        # And snapshot where the money will go. Done here rather than in each
+        # viewset because both the member path (/me/loans/) and the officer
+        # path (/loans/) come through this one method — the same reason the
+        # interest rate is captured here.
+        #
+        # A read-through to membership.bank_account_no would let a member
+        # redirect an approved payout by editing their own profile. The
+        # destination fields are read-only on this serializer, so a client
+        # cannot supply one either.
+        loan.snapshot_destination()
+        loan.save(update_fields=["destination_bank_name",
+                                 "destination_bank_code",
+                                 "destination_account_no", "updated_at"])
+        return loan

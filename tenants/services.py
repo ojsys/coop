@@ -63,7 +63,7 @@ class BankDetailError(Exception):
 
 def propose_bank_detail_change(cooperative, *, actor, bank_name="",
                                bank_account_name="", bank_account_no="",
-                               note=""):
+                               bank_code="", note=""):
     """Record proposed collection-account details and send them for approval.
 
     Returns ``(change, approval_request)``. Nothing on the cooperative moves
@@ -75,10 +75,15 @@ def propose_bank_detail_change(cooperative, *, actor, bank_name="",
 
     proposed = {
         "bank_name": (bank_name or "").strip(),
+        "bank_code": (bank_code or "").strip(),
         "bank_account_name": (bank_account_name or "").strip(),
         "bank_account_no": (bank_account_no or "").strip(),
     }
-    if not any(proposed.values()):
+    # A bank code on its own is not a proposal — it identifies a bank but names
+    # no account, and letting it through alone would raise an approval request
+    # an officer could not meaningfully judge.
+    if not any(value for field, value in proposed.items()
+               if field != "bank_code"):
         raise BankDetailError(
             "Give at least a bank name and account number to propose.")
 
@@ -94,6 +99,7 @@ def propose_bank_detail_change(cooperative, *, actor, bank_name="",
     change = BankDetailChange.all_objects.create(
         cooperative=cooperative,
         previous_bank_name=cooperative.bank_name,
+        previous_bank_code=cooperative.bank_code,
         previous_bank_account_name=cooperative.bank_account_name,
         previous_bank_account_no=cooperative.bank_account_no,
         requested_by=actor,
@@ -126,13 +132,15 @@ def apply_bank_detail_change(change, *, actor=None):
     coop = change.cooperative
     before = {
         "bank_name": coop.bank_name,
+        "bank_code": coop.bank_code,
         "bank_account_name": coop.bank_account_name,
         "bank_account_no": coop.bank_account_no,
     }
     coop.bank_name = change.bank_name
+    coop.bank_code = change.bank_code
     coop.bank_account_name = change.bank_account_name
     coop.bank_account_no = change.bank_account_no
-    coop.save(update_fields=["bank_name", "bank_account_name",
+    coop.save(update_fields=["bank_name", "bank_code", "bank_account_name",
                              "bank_account_no", "updated_at"])
 
     change.applied_at = timezone.now()
@@ -145,6 +153,7 @@ def apply_bank_detail_change(change, *, actor=None):
         before=before,
         after={
             "bank_name": coop.bank_name,
+            "bank_code": coop.bank_code,
             "bank_account_name": coop.bank_account_name,
             "bank_account_no": coop.bank_account_no,
         },

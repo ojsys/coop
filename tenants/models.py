@@ -81,6 +81,11 @@ class Cooperative(TimeStampedModel):
     # The society's own collection account — shown to members who prefer to repay
     # loans (or pay dues) by direct bank transfer instead of an online gateway.
     bank_name = models.CharField(max_length=120, blank=True)
+    # Paystack's code for the bank above, needed to create the society's
+    # settlement subaccount (the API takes a code, not a name). Not writable on
+    # the profile for the same reason the other three are not — see
+    # CooperativeUpdateSerializer.
+    bank_code = models.CharField(max_length=10, blank=True)
     bank_account_name = models.CharField(max_length=200, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
 
@@ -100,9 +105,22 @@ class Cooperative(TimeStampedModel):
         baseline = [
             ("1000", "Cash", Account.Kind.ASSET),
             ("1010", "Bank / PSP Settlement", Account.Kind.ASSET),
+            # Money the society has deposited with the platform specifically to
+            # lend from. Separate from 1010 because only this balance can fund
+            # an electronic disbursement: 1010 mixes money sitting in the
+            # society's own bank (unreachable by a transfer) with money at the
+            # PSP, so treating the two as one would let an officer try to
+            # disburse funds that cannot be moved.
+            ("1020", "Disbursement Wallet", Account.Kind.ASSET),
             ("2000", "Member Funds", Account.Kind.LIABILITY),
             ("4000", "Dues & Levies Income", Account.Kind.INCOME),
             ("3000", "Share Capital", Account.Kind.EQUITY),
+            # The provider's fee on a wallet top-up. Without an expense account
+            # the top-up journal cannot balance: the society pays the gross, the
+            # platform balance receives the net, and the difference has to land
+            # somewhere truthful rather than being credited to the wallet as
+            # money that does not exist.
+            ("5000", "Payment Charges", Account.Kind.EXPENSE),
         ]
         for code, acc_name, kind in baseline:
             Account.all_objects.get_or_create(
@@ -127,11 +145,17 @@ class BankDetailChange(TenantScopedModel, TimeStampedModel):
     """
 
     bank_name = models.CharField(max_length=120, blank=True)
+    bank_code = models.CharField(max_length=10, blank=True)
     bank_account_name = models.CharField(max_length=200, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
 
     # What it would replace, captured when the change is proposed.
     previous_bank_name = models.CharField(max_length=120, blank=True)
+    # The code is carried through the whole proposal, not just the name. If it
+    # were dropped here, applying an approved change would write the new bank
+    # name over the old code — leaving a subaccount pointed at the wrong bank,
+    # with nothing on screen to show it.
+    previous_bank_code = models.CharField(max_length=10, blank=True)
     previous_bank_account_name = models.CharField(max_length=200, blank=True)
     previous_bank_account_no = models.CharField(max_length=20, blank=True)
 
@@ -153,13 +177,28 @@ class BankDetailChange(TenantScopedModel, TimeStampedModel):
     def is_applied(self) -> bool:
         return self.applied_at is not None
 
+    @staticmethod
+    def _bank_label(name: str, code: str) -> str:
+        """``Access Bank (044)`` — the code shown beside the name.
+
+        The approver judges by the name, but the *code* is what settlement
+        actually follows. Showing both means a mismatch between them is visible
+        to the person approving rather than discovered when money lands at the
+        wrong bank.
+        """
+        if name and code:
+            return f"{name} ({code})"
+        return name or (f"bank code {code}" if code else "")
+
     def describe(self) -> str:
         """Old → new, for the approver who has to judge it."""
         before = " / ".join(filter(None, [
-            self.previous_bank_name, self.previous_bank_account_no,
+            self._bank_label(self.previous_bank_name, self.previous_bank_code),
+            self.previous_bank_account_no,
             self.previous_bank_account_name,
         ])) or "not set"
         after = " / ".join(filter(None, [
-            self.bank_name, self.bank_account_no, self.bank_account_name,
+            self._bank_label(self.bank_name, self.bank_code),
+            self.bank_account_no, self.bank_account_name,
         ])) or "not set"
         return f"Collection account: {before} → {after}"

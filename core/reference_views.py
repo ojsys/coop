@@ -15,9 +15,20 @@ class ReferenceView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        # Local import: core is imported by every app, so it must not pull one
+        # of them in at module load.
+        from payments.models import Bank
+
         return Response({
             "states": states_payload(),
             "coop_types": COOP_TYPES,
+            # Empty until `refresh_banks` has been run (or when no live PSP key
+            # is configured). The frontend treats an empty list as "no verified
+            # catalogue" and falls back to a text input, so bank entry keeps
+            # working either way.
+            "banks": list(
+                Bank.objects.filter(active=True).values("code", "name")
+            ),
             "white_label": {
                 # Read straight from settings. A defensive default here would
                 # be a second place for this value to live — which is exactly

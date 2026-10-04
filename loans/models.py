@@ -57,11 +57,63 @@ class Loan(TenantScopedModel, TimeStampedModel):
     decided_at = models.DateTimeField(null=True, blank=True)
     disbursed_at = models.DateTimeField(null=True, blank=True)
 
+    # Where the money will go, captured when the loan is applied for.
+    #
+    # A snapshot rather than a read-through to membership.bank_account_no,
+    # because a member can edit their own bank details: without this, changing
+    # the account number after an officer approved a loan would silently
+    # redirect the payout, and the officer would have vetted one destination
+    # while another was paid. Same approach as savings.Withdrawal.
+    #
+    # Blank is legitimate — cash disbursement needs no account (disburse_loan
+    # defaults to the Cash account) — so an empty destination is not an error
+    # here. It is refused at *electronic* disbursement instead, where it
+    # actually matters.
+    #
+    # While a loan is still PENDING the snapshot tracks the member (see
+    # accounts.serializers.MemberSelfSerializer); from APPROVED onward it is
+    # frozen, which is precisely the window in which a redirect would pay the
+    # wrong account.
+    destination_bank_name = models.CharField(max_length=120, blank=True)
+    destination_bank_code = models.CharField(max_length=10, blank=True)
+    destination_account_no = models.CharField(max_length=20, blank=True)
+
     class Meta:
         ordering = ["-created_at"]
 
     def __str__(self) -> str:
         return f"Loan {self.id} · {self.membership.member_no}"
+
+    @property
+    def destination_is_payable(self) -> bool:
+        """Whether this loan can be paid out electronically.
+
+        A transfer recipient needs a bank **code** and an account number; a
+        bank name alone is not enough, which is the state every record written
+        before bank selection is in.
+        """
+        return bool(self.destination_bank_code and self.destination_account_no)
+
+    def describe_destination(self) -> str:
+        """The destination, for an officer deciding whether to approve."""
+        if not (self.destination_bank_name or self.destination_account_no):
+            return "No account on file — cash collection only"
+        bank = self.destination_bank_name or "Unknown bank"
+        if self.destination_bank_code:
+            bank = f"{bank} ({self.destination_bank_code})"
+        return f"{bank} · {self.destination_account_no or 'no account number'}"
+
+    def snapshot_destination(self) -> None:
+        """Copy the member's current bank details onto this loan.
+
+        Called at application, and again on a PENDING loan when the member
+        fills in details they had not supplied yet. Never once APPROVED — that
+        freeze is the control.
+        """
+        membership = self.membership
+        self.destination_bank_name = membership.bank_name
+        self.destination_bank_code = membership.bank_code
+        self.destination_account_no = membership.bank_account_no
 
     def _schedule(self):
         from loans.amortization import flat_schedule

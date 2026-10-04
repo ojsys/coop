@@ -34,7 +34,7 @@ from loans.views import (
 )
 from payments.views import (
     FlutterwaveWebhookView, PaymentEventViewSet, PaystackWebhookView,
-    ProviderAccountViewSet,
+    PayoutViewSet, ProviderAccountViewSet, WalletViewSet,
 )
 from platform_admin.public_views import InvoicePayView, InvoiceVerifyView
 from platform_admin.views import (
@@ -43,8 +43,13 @@ from platform_admin.views import (
     ProviderStatusViewSet, SubscriptionViewSet, SupportTicketViewSet,
 )
 from core.public_views import (
-    PublicBrandingView, PublicPlansView, PublicReferenceView,
-    PublicSiteContentView, PublicSubdivisionsView,
+    PublicBrandingView,
+    PublicLegalDocumentView,
+    PublicLegalIndexView,
+    PublicPlansView,
+    PublicReferenceView,
+    PublicSiteContentView,
+    PublicSubdivisionsView,
 )
 from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
@@ -70,6 +75,12 @@ router.register("internal-transfers", InternalTransferViewSet,
                 basename="internal-transfer")
 router.register("provider-accounts", ProviderAccountViewSet,
                 basename="provider-account")
+# The disbursement wallet: GET /wallet/ for the balance and recent top-ups,
+# POST /wallet/topup/ to fund it, POST /wallet/verify/ to confirm a payment.
+router.register("wallet", WalletViewSet, basename="wallet")
+# Money sent out. `?unsettled=true` lists what is still in flight, and
+# POST /payouts/{id}/recheck/ asks the provider what really happened.
+router.register("payouts", PayoutViewSet, basename="payout")
 router.register("payment-events", PaymentEventViewSet, basename="payment-event")
 router.register("meetings", MeetingViewSet, basename="meeting")
 router.register("attendances", AttendanceViewSet, basename="attendance")
@@ -134,6 +145,10 @@ urlpatterns = [
     # Editable marketing copy and imagery, managed from the Django admin.
     path("public/site-content/", PublicSiteContentView.as_view(),
          name="public-site-content"),
+    # Policy pages an admin pastes in (privacy notice, terms, and so on).
+    path("public/legal/", PublicLegalIndexView.as_view(), name="public-legal"),
+    path("public/legal/<slug:slug>/", PublicLegalDocumentView.as_view(),
+         name="public-legal-document"),
     # The signup form's catalogue. Public because signup is.
     path("public/reference/", PublicReferenceView.as_view(),
          name="public-reference"),

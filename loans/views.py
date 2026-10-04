@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from core.permissions import IsPrivilegedOfficer, IsPrivilegedOfficerOrReadOnly
 from core.views import TenantScopedViewMixin
 from loans.models import Loan, LoanProduct, LoanRepayment
 from loans.serializers import (
@@ -18,15 +18,35 @@ from loans.services import (
 
 class LoanProductViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     serializer_class = LoanProductSerializer
-    permission_classes = [IsAuthenticated]
+    # Reads are harmless — a product catalogue is not member data. Writes are
+    # not: this is where interest rates, maximum amounts and terms are set, and
+    # under IsAuthenticated any member could rewrite the price of credit for
+    # the whole society, or raise their own borrowing limit before applying.
+    permission_classes = [IsPrivilegedOfficerOrReadOnly]
 
     def get_queryset(self):
         return LoanProduct.objects.all()
 
 
 class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
+    """The officer-side loan book. Members use ``/me/loans/`` instead.
+
+    Privileged officers only, **reads included** — not merely the write actions.
+    Two separate problems were open under ``IsAuthenticated``:
+
+    * ``approve`` and ``disburse`` were callable by any authenticated member, so
+      a member could approve their own pending loan and then disburse it,
+      posting a real journal that moves the principal out of Cash. The
+      /approvals/ queue advertises dual control, but these direct endpoints were
+      an unguarded parallel path straight past it.
+    * ``LoanSerializer`` renders ``member_bank_account_no``, phone, email, share
+      capital and photograph, and this queryset is scoped to the cooperative
+      rather than to the caller — so listing it handed any member every other
+      member's bank account number.
+    """
+
     serializer_class = LoanSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsPrivilegedOfficer]
     http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
@@ -52,7 +72,27 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        return self._act(approve_loan, actor=request.user, approve=True)
+        """Approve a loan — and pay it out, where it can be paid.
+
+        The response carries ``auto_disbursement_error`` when the money could
+        not be sent, so the officer learns why at the moment they approve
+        rather than discovering an unpaid approved loan days later.
+        """
+        loan = self.get_object()
+        try:
+            approve_loan(loan, actor=request.user, approve=True)
+        except LoanError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+        # Read the transient attributes before refresh_from_db discards them.
+        payout = getattr(loan, "auto_disbursement", None)
+        error = getattr(loan, "auto_disbursement_error", None)
+
+        loan.refresh_from_db()
+        data = self.get_serializer(loan).data
+        data["auto_disbursement_error"] = error
+        data["payout_reference"] = payout.reference if payout else None
+        return Response(data)
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):
@@ -76,7 +116,11 @@ class LoanRepaymentViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
     bank transfers (``?status=pending``)."""
 
     serializer_class = RepaymentClaimSerializer
-    permission_classes = [IsAuthenticated]
+    # Privileged officers only. ``confirm`` posts a repayment to the ledger, and
+    # the list shows other members' repayment claims — neither is ordinary
+    # member business. Members report their own transfers through
+    # /me/loans/{id}/report-transfer/.
+    permission_classes = [IsPrivilegedOfficer]
 
     def get_queryset(self):
         qs = LoanRepayment.objects.select_related(

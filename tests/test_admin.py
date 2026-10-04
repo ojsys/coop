@@ -37,8 +37,9 @@ from dividends.models import DividendAllocation, DividendDeclaration
 from governance.models import Attendance, Meeting, Resolution, Vote
 from ledger.models import Account, InternalTransfer, Journal, LedgerEntry
 from loans.models import Loan, LoanProduct, LoanRepayment, RepaymentInstalment
-from payments.models import PaymentEvent, Provider, ProviderAccount
-from platform_admin.models import (Domain, Incident, Invoice,
+from payments.models import (Bank, PaymentEvent, Payout, Provider,
+                             ProviderAccount, WalletTopUp)
+from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
@@ -188,6 +189,27 @@ def dataset(coop, member, dues_type, member_funds):
             requested_by=member.user,
         )
 
+    # Not tenant-scoped: one catalogue shared by every cooperative, normally
+    # populated by `manage.py refresh_banks`.
+    Bank.objects.create(code="044", name="Access Bank", slug="access-bank")
+
+    # Left PENDING on purpose: an unconfirmed top-up has posted no journal,
+    # which is the state the read-only admin screen exists to show.
+    WalletTopUp.all_objects.create(
+        cooperative=coop, amount=Decimal("50000.00"),
+        psp_reference="WLT-FIXTURE-1", initiated_by=member.user,
+    )
+
+    # Pending on purpose too: a payout the provider has accepted but not yet
+    # settled is the row an officer rechecks.
+    Payout.all_objects.create(
+        cooperative=coop, kind=Payout.Kind.LOAN, object_id=loan.id,
+        amount=Decimal("100000.00"), status=Payout.Status.PENDING,
+        destination_bank_name="Access Bank", destination_bank_code="044",
+        destination_account_no="0123456789",
+        reference="PO-FIXTURE-1", requested_by=member.user,
+    )
+
     PaymentEvent.all_objects.create(
         cooperative=coop, provider=Provider.PAYSTACK, event_id="evt_1",
         reference="CTB-REF-1", amount=Decimal("5000.00"),
@@ -228,6 +250,12 @@ def dataset(coop, member, dues_type, member_funds):
     SupportTicket.objects.create(cooperative=coop, subject="Cannot log in")
     PlatformProfile.load()
     NotificationTemplate.objects.create(key="welcome", name="Welcome email")
+    # Unpublished on purpose: a policy is pasted in stages, and a draft that is
+    # invisible to visitors is the state the admin screen exists to manage.
+    LegalDocument.objects.create(
+        slug="terms", title="Terms of service",
+        body="## Scope\n\nDrafted text goes here.", published=False,
+    )
 
     # Public-site CMS. Migration 0007 seeds this copy in a real database, but
     # the fixture makes its own rows so it stays true to the docstring above

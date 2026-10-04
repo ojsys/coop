@@ -12,13 +12,53 @@ from django.contrib import admin, messages
 from django.db import models
 from django.utils.html import format_html
 
-from platform_admin.models import (Domain, Incident, Invoice,
+from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
                                    SiteFeature, SiteGalleryImage, SiteShowcase,
                                    SiteStep, SiteTrustBadge, Subscription,
                                    SupportTicket)
+
+
+@admin.register(LegalDocument)
+class LegalDocumentAdmin(admin.ModelAdmin):
+    """Where a lawyer's drafted policy gets pasted.
+
+    Deliberately plain: the whole point is that publishing a policy is an admin
+    task rather than a code change, so there is nothing clever here to get in
+    the way. The body gets a large textarea because these documents are long.
+    """
+
+    list_display = ("title", "slug", "published", "effective_date", "order",
+                    "updated_at")
+    list_editable = ("published", "order")
+    list_filter = ("published",)
+    search_fields = ("title", "slug", "body")
+    prepopulated_fields = {"slug": ("title",)}
+    readonly_fields = ("created_at", "updated_at")
+    formfield_overrides = {
+        models.TextField: {
+            "widget": forms.Textarea(attrs={"rows": 34, "cols": 100,
+                                            "style": "font-family:monospace"}),
+        },
+    }
+    fieldsets = (
+        (None, {
+            "fields": ("title", "slug", "published", "effective_date", "order"),
+            "description": (
+                "A page served at /&lt;slug&gt;. Leave <b>published</b> off "
+                "until the text is complete — an unpublished document is "
+                "invisible to visitors.<br><br>"
+                "<b>/privacy</b> is registered with Google Play. Until a "
+                "document with that slug is published, the site serves a "
+                "built-in notice, so the store link never breaks."
+            ),
+        }),
+        ("The document", {"fields": ("body",)}),
+        ("Record", {"fields": ("created_at", "updated_at"),
+                    "classes": ("collapse",)}),
+    )
 
 
 # ── Billing ────────────────────────────────────────────────────────────────

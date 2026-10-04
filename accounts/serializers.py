@@ -102,7 +102,7 @@ class MembershipSerializer(serializers.ModelSerializer):
                   # KYC / headshot
                   "photo", "date_of_birth", "gender", "address", "occupation",
                   "next_of_kin_name", "next_of_kin_phone", "bank_name",
-                  "bank_account_no", "document_count"]
+                  "bank_code", "bank_account_no", "document_count"]
 
     def to_representation(self, instance):
         """Hand out a signed, expiring URL for the member's photograph.
@@ -187,10 +187,85 @@ class MemberSelfSerializer(MembershipSerializer):
     and KYC, but never officer-controlled fields (role, status, member no,
     share capital)."""
 
+    # Statuses in which a payout is pending or has been decided, so the
+    # destination must not move under it.
+    LIVE_LOAN_STATUSES = ("pending", "approved", "disbursed")
+    BANK_FIELDS = ("bank_name", "bank_code", "bank_account_no")
+
     class Meta(MembershipSerializer.Meta):
         read_only_fields = ["member_no", "role", "status", "share_capital",
                             "joined_at", "exited_at", "savings_balance",
                             "document_count"]
+
+    def validate(self, attrs):
+        """Refuse a bank-detail *change* while the member has a live loan.
+
+        The threat is narrow and real: approve a loan, then edit the account
+        number, and the payout goes somewhere the officer never vetted. The
+        snapshot on the loan already blocks that for approved loans, and this
+        closes the same door one step earlier.
+
+        **Filling a blank is allowed**, deliberately. Locking outright would
+        trap a member who applied before adding their details: snapshot blank,
+        edits refused, loan unpayable for ever. So an empty field can be
+        completed, and an existing value cannot be replaced.
+
+        Officers are not restricted here — a mistyped account number has to be
+        correctable, and writes through /members/ are privileged and audited.
+        """
+        attrs = super().validate(attrs)
+        if self.instance is None:
+            return attrs
+
+        changing = [
+            field for field in self.BANK_FIELDS
+            if field in attrs
+            and (attrs[field] or "") != (getattr(self.instance, field) or "")
+            # Filling a blank is a completion, not a redirect.
+            and (getattr(self.instance, field) or "")
+        ]
+        if not changing:
+            return attrs
+
+        from loans.models import Loan
+
+        live = (Loan.all_objects
+                .filter(membership=self.instance,
+                        status__in=self.LIVE_LOAN_STATUSES)
+                .exists())
+        if live:
+            raise serializers.ValidationError({
+                changing[0]: [
+                    "Your bank details cannot be changed while you have a loan "
+                    "application or an active loan, because a loan is paid to "
+                    "the account recorded when you applied. Ask an officer of "
+                    "your cooperative to correct them."
+                ]
+            })
+        return attrs
+
+    def update(self, instance, validated_data):
+        """Keep a PENDING loan's destination tracking the member.
+
+        Only reachable for a blank being filled (see ``validate``). Without
+        this, a member who applied before supplying an account would be left
+        with a permanently blank destination and an unpayable loan.
+        """
+        membership = super().update(instance, validated_data)
+
+        if not any(field in validated_data for field in self.BANK_FIELDS):
+            return membership
+
+        from loans.models import Loan
+
+        pending = Loan.all_objects.filter(membership=membership,
+                                          status=Loan.Status.PENDING)
+        for loan in pending:
+            loan.snapshot_destination()
+            loan.save(update_fields=["destination_bank_name",
+                                     "destination_bank_code",
+                                     "destination_account_no", "updated_at"])
+        return membership
 
 
 class MemberDocumentSerializer(serializers.ModelSerializer):

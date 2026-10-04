@@ -5,8 +5,12 @@ double-entry journal:
     Dr  <settlement asset>   (Cash, or Bank/PSP)     amount
         Cr  <type GL account>  (Member Funds, ...)   amount   [member dimension]
 
-Money lands in the cooperative's *own* settlement account — the platform never
-holds funds (PRD "ledger, not custodian").
+Money lands in the cooperative's *own* settlement account: a contribution never
+passes through the platform (PRD "ledger first, custodian only on request").
+
+Note the asymmetry with paying money *out*. Collections settle to the society's
+bank, so nothing here draws on a platform-held balance — unlike a disbursement,
+which can only come from the society's own funded wallet (see payments.services).
 """
 from __future__ import annotations
 

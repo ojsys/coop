@@ -69,7 +69,8 @@ class CooperativeViewSet(mixins.ListModelMixin,
             return [IsCoopAdminOrPlatform()]
         if self.action in self._PLATFORM_ACTIONS:
             return [IsPlatformAdmin()]
-        if self.action == "propose_bank_details":
+        if self.action in ("propose_bank_details",
+                           "connect_settlement_account"):
             return [IsCoopAdminOrPlatform()]
         return super().get_permissions()
 
@@ -91,6 +92,7 @@ class CooperativeViewSet(mixins.ListModelMixin,
                 coop,
                 actor=request.user,
                 bank_name=request.data.get("bank_name", ""),
+                bank_code=request.data.get("bank_code", ""),
                 bank_account_name=request.data.get("bank_account_name", ""),
                 bank_account_no=request.data.get("bank_account_no", ""),
                 note=request.data.get("note", ""),
@@ -105,6 +107,35 @@ class CooperativeViewSet(mixins.ListModelMixin,
             "approval_id": approval.pk,
             "summary": change.describe(),
         }, status=201)
+
+    @action(detail=True, methods=["post"],
+            url_path="connect-settlement-account")
+    def connect_settlement_account(self, request, pk=None):
+        """Create this society's PSP settlement subaccount at the provider.
+
+        Not done at provisioning, despite what the provisioning screen used to
+        claim: a subaccount needs verified bank details, and those arrive later
+        and through dual control. Idempotent — calling it twice returns the
+        existing account rather than creating a second one.
+        """
+        from payments.services import SubaccountError, ensure_subaccount
+
+        coop = self.get_object()
+        try:
+            account, created = ensure_subaccount(coop, actor=request.user)
+        except SubaccountError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+        return Response({
+            "detail": (
+                "Settlement account connected. Collections will settle to the "
+                "society's own bank once split settlement is enabled."
+                if created else
+                "This society already has a connected settlement account."
+            ),
+            "subaccount_code": account.subaccount_code,
+            "created": created,
+        }, status=201 if created else 200)
 
     def get_queryset(self):
         from accounts.models import Membership
