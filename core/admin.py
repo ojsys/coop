@@ -96,6 +96,52 @@ class TwoFactorRequiredMixin(TwoFactorActionsMixin):
         return (super().has_delete_permission(request, obj)
                 and self.has_two_factor(request))
 
+    # ── Say why the page is read-only ───────────────────────────────────────
+    #
+    # Denying the permission is correct but silent: Django renders "View loan"
+    # with no Save button and no explanation, which is indistinguishable from a
+    # broken admin. An operator cannot guess that the cause is a flag on their
+    # own user — and the fix is one they can apply themselves, since UserAdmin
+    # deliberately skips this mixin so nobody can be locked out permanently.
+    #
+    # So the page explains itself and links straight to their own record.
+    # Without this, "the admin has no edit features" is the only reasonable
+    # conclusion to draw from it.
+    def _explain_read_only(self, request):
+        if self.has_two_factor(request):
+            return
+        from django.contrib import messages
+        from django.urls import NoReverseMatch, reverse
+        from django.utils.html import format_html
+
+        try:
+            own = reverse("admin:accounts_user_change", args=[request.user.pk])
+            where = format_html(
+                ' <a href="{}"><strong>Open your user record</strong></a> and '
+                'tick "Two factor enabled" under Permissions, then reload this '
+                'page.', own)
+        except NoReverseMatch:                      # pragma: no cover
+            where = format_html(
+                ' Enable "Two factor enabled" on your own user under '
+                'Permissions, then reload this page.')
+
+        messages.warning(request, format_html(
+            "This page is read-only because two-factor authentication is not "
+            "enabled on your account. Records that touch money require it — "
+            "superusers included.{}", where))
+
+    def changelist_view(self, request, extra_context=None):
+        self._explain_read_only(request)
+        return super().changelist_view(request, extra_context)
+
+    def changeform_view(self, request, object_id=None, form_url="",
+                        extra_context=None):
+        # Only on the way in: a refused POST has its own errors to show.
+        if request.method == "GET":
+            self._explain_read_only(request)
+        return super().changeform_view(request, object_id, form_url,
+                                       extra_context)
+
 
 class TenantScopedModelAdmin(UnscopedAdminMixin, admin.ModelAdmin):
     """Base for any model inheriting ``core.models.TenantScopedModel``."""

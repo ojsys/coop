@@ -251,3 +251,65 @@ def test_the_append_only_records_resist_even_a_2fa_superuser(
     assert model_admin.has_change_permission(request) is False
     assert model_admin.has_add_permission(request) is False
     assert model_admin.has_delete_permission(request) is False
+
+
+# ── The admin must say why it is read-only ──────────────────────────────────
+#
+# Denying the write permission is correct, but Django's denial is silent: the
+# page renders as "View <model>" with no Save button and no reason given, which
+# is indistinguishable from a broken admin. The cause is a flag on the
+# operator's own user, which they can set themselves — and none of that is
+# visible anywhere on the page.
+def test_a_read_only_change_page_explains_itself(client, disbursed_loan, no_2fa):
+    client.force_login(no_2fa)
+
+    resp = client.get(f"/admin/loans/loan/{disbursed_loan.pk}/change/")
+    body = resp.content.decode()
+
+    assert "two-factor authentication is not enabled" in body
+    assert 'name="_save"' not in body, "still read-only, as intended"
+
+
+def test_the_notice_links_to_the_operators_own_user(client, disbursed_loan,
+                                                    no_2fa):
+    """The fix is self-service, so point at it rather than describing it."""
+    client.force_login(no_2fa)
+
+    body = client.get(
+        f"/admin/loans/loan/{disbursed_loan.pk}/change/").content.decode()
+
+    assert f"/admin/accounts/user/{no_2fa.pk}/change/" in body
+    assert "Two factor enabled" in body
+
+
+def test_the_changelist_explains_itself_too(client, no_2fa):
+    client.force_login(no_2fa)
+
+    body = client.get("/admin/loans/loan/").content.decode()
+
+    assert "two-factor authentication is not enabled" in body
+
+
+def test_an_operator_with_2fa_sees_no_such_notice(client, disbursed_loan,
+                                                  operator):
+    client.force_login(operator)
+
+    body = client.get(
+        f"/admin/loans/loan/{disbursed_loan.pk}/change/").content.decode()
+
+    assert "two-factor authentication is not enabled" not in body
+    assert 'name="_save"' in body
+
+
+@pytest.fixture
+def disbursed_loan(coop, member):
+    """A loan to open an admin page on; the status does not matter here."""
+    from loans.models import Loan, LoanProduct
+
+    with use_tenant(coop):
+        product = LoanProduct.objects.create(
+            name="Quick", interest_rate=Decimal("10"),
+            max_amount=Decimal("500000"), max_term_months=12)
+        return Loan.objects.create(
+            membership=member, product=product, principal=Decimal("1000"),
+            interest_rate=Decimal("10"), term_months=6)
