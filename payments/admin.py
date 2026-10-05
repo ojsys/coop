@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import json
 
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.utils.html import format_html
 
-from core.admin import TenantScopedModelAdmin, TwoFactorRequiredMixin
+from core.admin import (TenantScopedModelAdmin, TwoFactorActionsMixin,
+                        TwoFactorRequiredMixin)
 from payments.models import (Bank, PaymentEvent, Payout, ProviderAccount,
                              WalletTopUp)
 
@@ -25,8 +26,12 @@ class PayoutAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
 
     A payout row is the record of a transfer that has already been handed to
     the provider. Editing its status by hand would make the ledger disagree
-    with what the provider actually did; use the officer-facing recheck, which
-    asks the provider and reconciles.
+    with what the provider actually did.
+
+    The legitimate operation is therefore an *action*, not an edit: ask the
+    provider what really happened and apply whatever it says. Without it this
+    page showed a payout stuck on "pending" and offered no way to resolve it,
+    which is the case support is called about.
     """
 
     list_display = ("reference", "kind", "cooperative", "amount", "status",
@@ -40,6 +45,59 @@ class PayoutAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     readonly_fields = tuple(
         f.name for f in Payout._meta.fields
     ) + ("created_at", "updated_at")
+
+    actions = ("recheck_selected",)
+    # Reconciles money: a payout that turns out to have failed has its journal
+    # reversed and its loan reverted.
+    two_factor_actions = ("recheck_selected",)
+
+    @admin.action(description="Recheck with the provider")
+    def recheck_selected(self, request, queryset):
+        """Ask the provider, and apply the answer through the webhook path.
+
+        Deliberately the same ``recheck_payout`` the console calls, so the admin
+        and the officer-facing screen cannot form different opinions about
+        whether money moved.
+        """
+        from payments.providers import PaymentInitError
+        from payments.services import recheck_payout
+
+        asked = changed = skipped = 0
+        for payout in queryset:
+            if not payout.needs_recheck:
+                # The provider has already given a final answer; asking again
+                # would not change it.
+                skipped += 1
+                continue
+
+            reference, before = payout.reference, payout.status
+            try:
+                payout = recheck_payout(payout, actor=request.user)
+            except PaymentInitError as exc:
+                self.message_user(
+                    request, f"{reference}: could not reach the provider — {exc}",
+                    messages.ERROR)
+                continue
+
+            asked += 1
+            if payout.status != before:
+                changed += 1
+                self.message_user(
+                    request,
+                    f"{reference}: {before} → {payout.status}. Any ledger "
+                    f"correction has been posted.",
+                    messages.SUCCESS)
+
+        if asked and not changed:
+            self.message_user(
+                request,
+                f"Asked the provider about {asked} payout(s); it reports no "
+                f"change yet.", messages.INFO)
+        if skipped:
+            self.message_user(
+                request,
+                f"Skipped {skipped} payout(s) the provider has already settled "
+                f"or failed — there is nothing left to ask.", messages.INFO)
 
     def has_add_permission(self, request):
         return False
@@ -78,18 +136,23 @@ class WalletTopUpAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
 
 
 @admin.register(Bank)
-class BankAdmin(admin.ModelAdmin):
+class BankAdmin(TwoFactorActionsMixin, admin.ModelAdmin):
     """The provider's bank catalogue — read-only.
 
     A plain ModelAdmin, not TenantScopedModelAdmin: the catalogue is the same
     for every cooperative, so this model has no ``cooperative`` field to scope
     by.
 
-    Read-only because the rows are pulled from the provider by
-    ``manage.py refresh_banks``. A hand-typed bank code would not fail
-    visibly — it would quietly point a cooperative's settlement subaccount, or
-    a member's payout, at the wrong bank. Inactive rows are kept on purpose:
-    records may still reference a code the provider has dropped.
+    Read-only because the rows are pulled from the provider. A hand-typed bank
+    code would not fail visibly — it would quietly point a cooperative's
+    settlement subaccount, or a member's payout, at the wrong bank. Inactive
+    rows are kept on purpose: records may still reference a code the provider
+    has dropped.
+
+    Refreshing is offered as an action rather than left to
+    ``manage.py refresh_banks`` alone, because an empty or stale catalogue blocks
+    every electronic payout — and needing shell access to fix that is a poor
+    place for an operator to be. Pulling the list is idempotent.
     """
 
     list_display = ("name", "code", "currency", "provider", "active")
@@ -98,6 +161,42 @@ class BankAdmin(admin.ModelAdmin):
     ordering = ("name",)
     readonly_fields = ("code", "name", "slug", "currency", "provider",
                        "active", "created_at", "updated_at")
+    actions = ("refresh_catalogue",)
+    # Payout destinations are resolved against these codes, so this is data money
+    # depends on even though the pull itself moves none.
+    two_factor_actions = ("refresh_catalogue",)
+
+    @admin.action(description="Refresh the catalogue from the provider")
+    def refresh_catalogue(self, request, queryset):
+        """Pull the provider's bank list. Ignores the selection by design.
+
+        The whole catalogue is replaced from the provider, so refreshing "the
+        selected rows" would be a misleading promise — Django requires a
+        selection to run an action, and this one simply does not use it.
+        """
+        from payments.models import Bank
+        from payments.providers import PaymentInitError
+
+        try:
+            summary = Bank.refresh()
+        except PaymentInitError as exc:
+            self.message_user(request, f"Could not reach the provider: {exc}",
+                              messages.ERROR)
+            return
+
+        if not summary["fetched"]:
+            self.message_user(
+                request,
+                "No banks returned — there is no live provider key configured, "
+                "so nothing was changed.", messages.WARNING)
+            return
+
+        self.message_user(
+            request,
+            f"Fetched {summary['fetched']} banks: {summary['created']} added, "
+            f"{summary['updated']} updated, {summary['deactivated']} marked "
+            f"inactive. Codes already in use are never deleted.",
+            messages.SUCCESS)
 
     def has_add_permission(self, request):
         return False
