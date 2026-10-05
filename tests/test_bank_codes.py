@@ -213,3 +213,118 @@ def test_refresh_keeps_a_dropped_bank_but_marks_it_inactive(coop, monkeypatch):
     assert summary["deactivated"] == 1
     assert Bank.objects.get(code="999").active is False, (
         "dropped banks are deactivated, not deleted")
+
+
+# ── An officer filling in a member's bank details ────────────────────────────
+#
+# The console's own member form is the path most bank details are entered
+# through, and it sent `bank_name` alone — so a member whose details an officer
+# typed had no bank code and could never be paid electronically. Their approved
+# loans sat in the awaiting-payment queue reading "no bank code recorded", which
+# is the message that surfaced this. The API accepted the code all along; the
+# form never sent it.
+def test_an_officer_can_record_a_members_bank_code(coop, member):
+    officer = _officer(coop, "sec@imole.coop")
+
+    resp = _client(officer).patch(
+        f"/api/v1/members/{member.id}/",
+        {"bank_name": "Access Bank", "bank_code": "044",
+         "bank_account_no": "0123456789"},
+        format="json", HTTP_X_COOPERATIVE_ID=str(coop.id))
+
+    assert resp.status_code == 200, resp.content
+    member.refresh_from_db()
+    assert member.bank_code == "044"
+    assert member.bank_name == "Access Bank"
+
+
+def test_the_recorded_code_makes_a_loan_payable(coop, member):
+    """The whole point: without a code `destination_is_payable` is false and
+    electronic disbursement refuses."""
+    from decimal import Decimal
+
+    from loans.models import Loan, LoanProduct
+
+    officer = _officer(coop, "sec2@imole.coop")
+    _client(officer).patch(
+        f"/api/v1/members/{member.id}/",
+        {"bank_name": "Access Bank", "bank_code": "044",
+         "bank_account_no": "0123456789"},
+        format="json", HTTP_X_COOPERATIVE_ID=str(coop.id))
+    member.refresh_from_db()
+
+    with use_tenant(coop):
+        product = LoanProduct.objects.create(
+            name="Quick", interest_rate=Decimal("10"),
+            max_amount=Decimal("500000"), max_term_months=12)
+        loan = Loan.objects.create(
+            membership=member, product=product, principal=Decimal("50000"),
+            interest_rate=Decimal("10"), term_months=6)
+    loan.snapshot_destination()
+
+    assert loan.destination_is_payable is True
+
+
+def test_an_officer_may_correct_bank_details_while_a_loan_is_live(coop, member):
+    """Members are blocked from this (it would redirect a vetted payout), but an
+    officer must be able to fix a mistyped account — otherwise a loan approved
+    against bad details can never be paid at all."""
+    from decimal import Decimal
+
+    from loans.models import Loan, LoanProduct
+
+    member.bank_name = "Wrong Bank"
+    member.bank_code = "058"
+    member.bank_account_no = "9999999999"
+    member.save(update_fields=["bank_name", "bank_code", "bank_account_no"])
+
+    with use_tenant(coop):
+        product = LoanProduct.objects.create(
+            name="Quick", interest_rate=Decimal("10"),
+            max_amount=Decimal("500000"), max_term_months=12)
+        Loan.objects.create(
+            membership=member, product=product, principal=Decimal("50000"),
+            interest_rate=Decimal("10"), term_months=6,
+            status=Loan.Status.APPROVED)
+
+    officer = _officer(coop, "sec3@imole.coop")
+    resp = _client(officer).patch(
+        f"/api/v1/members/{member.id}/",
+        {"bank_name": "Access Bank", "bank_code": "044",
+         "bank_account_no": "0123456789"},
+        format="json", HTTP_X_COOPERATIVE_ID=str(coop.id))
+
+    assert resp.status_code == 200, resp.content
+    member.refresh_from_db()
+    assert member.bank_code == "044"
+
+
+def test_a_member_cannot_change_bank_details_while_a_loan_is_live(coop, member):
+    """The other side of the same rule — the control that keeps a vetted payout
+    pointed where the officer approved it."""
+    from decimal import Decimal
+
+    from loans.models import Loan, LoanProduct
+
+    member.bank_name = "Access Bank"
+    member.bank_code = "044"
+    member.bank_account_no = "0123456789"
+    member.save(update_fields=["bank_name", "bank_code", "bank_account_no"])
+
+    with use_tenant(coop):
+        product = LoanProduct.objects.create(
+            name="Quick", interest_rate=Decimal("10"),
+            max_amount=Decimal("500000"), max_term_months=12)
+        Loan.objects.create(
+            membership=member, product=product, principal=Decimal("50000"),
+            interest_rate=Decimal("10"), term_months=6,
+            status=Loan.Status.APPROVED)
+
+    resp = _client(member.user).patch(
+        "/api/v1/me/profile/",
+        {"bank_account_no": "1111111111"},
+        format="json", HTTP_X_COOPERATIVE_ID=str(coop.id))
+
+    assert resp.status_code == 400
+    member.refresh_from_db()
+    assert member.bank_account_no == "0123456789"
