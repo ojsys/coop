@@ -304,3 +304,127 @@ def test_with_two_factor_the_loan_admin_is_editable(operator):
 
     assert admin.has_change_permission(request) is True
     assert "reverse_disbursement" in admin.get_actions(request)
+
+
+# ── End to end through the real admin view ──────────────────────────────────
+#
+# The permission-method tests above assert what LoanAdmin *reports*. These drive
+# the actual change view, because "the loan record is editable" is a claim about
+# the rendered page and a save that persists — a second blocker (a readonly_fields
+# entry, a form error, a failing guard) would pass the method checks and still
+# leave the operator looking at a page they cannot change.
+def test_the_change_page_renders_with_a_save_button_when_2fa_is_on(
+        client, disbursed, operator):
+    client.force_login(operator)
+
+    resp = client.get(f"/admin/loans/loan/{disbursed.pk}/change/")
+
+    assert resp.status_code == 200
+    body = resp.content.decode()
+    assert "Change loan" in body
+    assert 'name="_save"' in body, "no Save button — the form is read-only"
+
+
+def test_the_change_page_is_read_only_without_2fa(client, disbursed):
+    plain = User.objects.create_user(
+        email="view@startupripple.co", full_name="Viewer", password="x",
+        is_staff=True, is_superuser=True, two_factor_enabled=False)
+    client.force_login(plain)
+
+    resp = client.get(f"/admin/loans/loan/{disbursed.pk}/change/")
+
+    body = resp.content.decode()
+    assert resp.status_code == 200, "viewing stays allowed"
+    assert 'name="_save"' not in body
+    assert "View loan" in body, (
+        "Django titles the page 'View loan' when change permission is denied — "
+        "this is exactly what an operator without 2FA sees")
+
+
+def _form_data(loan, **overrides):
+    """What the admin form posts back, inlines included.
+
+    The management-form keys are required: Django rejects a POST without them,
+    and omitting one would fail the save for a reason unrelated to permissions.
+    """
+    data = {
+        "cooperative": loan.cooperative_id,
+        "membership": loan.membership_id,
+        "product": loan.product_id,
+        "status": loan.status,
+        "principal": str(loan.principal),
+        "interest_rate": str(loan.interest_rate),
+        "term_months": str(loan.term_months),
+        "purpose": loan.purpose,
+        "destination_bank_name": loan.destination_bank_name,
+        "destination_bank_code": loan.destination_bank_code,
+        "destination_account_no": loan.destination_account_no,
+        "instalments-TOTAL_FORMS": "0",
+        "instalments-INITIAL_FORMS": "0",
+        "instalments-MIN_NUM_FORMS": "0",
+        "instalments-MAX_NUM_FORMS": "1000",
+        "repayments-TOTAL_FORMS": "0",
+        "repayments-INITIAL_FORMS": "0",
+        "repayments-MIN_NUM_FORMS": "0",
+        "repayments-MAX_NUM_FORMS": "1000",
+        "_save": "Save",
+    }
+    if loan.disbursement_journal_id:
+        data["disbursement_journal"] = loan.disbursement_journal_id
+    data.update(overrides)
+    return data
+
+
+def test_an_edit_actually_saves(client, disbursed, operator):
+    """The claim that matters: a change persists."""
+    client.force_login(operator)
+
+    resp = client.post(f"/admin/loans/loan/{disbursed.pk}/change/",
+                      _form_data(disbursed, purpose="School fees — corrected"))
+
+    assert resp.status_code == 302, getattr(resp, "context", None) and \
+        resp.context["adminform"].form.errors
+    disbursed.refresh_from_db()
+    assert disbursed.purpose == "School fees — corrected"
+
+
+def test_a_status_change_that_moves_no_money_saves(client, coop, member,
+                                                   product, operator):
+    client.force_login(operator)
+    with use_tenant(coop):
+        loan = Loan.objects.create(
+            membership=member, product=product, principal=Decimal("50000"),
+            interest_rate=Decimal("10"), term_months=6,
+            status=Loan.Status.PENDING)
+
+    resp = client.post(f"/admin/loans/loan/{loan.pk}/change/",
+                      _form_data(loan, status=Loan.Status.REJECTED))
+
+    assert resp.status_code == 302
+    loan.refresh_from_db()
+    assert loan.status == Loan.Status.REJECTED
+
+
+def test_the_dangerous_status_edit_is_refused_in_the_real_view(client,
+                                                               disbursed,
+                                                               operator):
+    """Re-renders the form with the guard's message instead of saving."""
+    client.force_login(operator)
+
+    resp = client.post(f"/admin/loans/loan/{disbursed.pk}/change/",
+                      _form_data(disbursed, status=Loan.Status.PENDING))
+
+    assert resp.status_code == 200, "a refused save re-renders, it does not redirect"
+    assert "Reverse disbursement" in resp.content.decode()
+    disbursed.refresh_from_db()
+    assert disbursed.status == Loan.Status.DISBURSED
+
+
+def test_both_actions_are_offered_on_the_changelist(client, disbursed,
+                                                    operator):
+    client.force_login(operator)
+
+    body = client.get("/admin/loans/loan/").content.decode()
+
+    assert "Reverse disbursement (posts a ledger reversal)" in body
+    assert "Return to pending (un-approve)" in body

@@ -147,6 +147,36 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         data["payout_reference"] = payout.reference
         return Response(data)
 
+    @action(detail=True, methods=["get"])
+    def disbursement(self, request, pk=None):
+        """Was this loan actually disbursed? The evidence, not just the status.
+
+        A read, so any office-holder may ask — including a Chairperson, who is
+        often the one a member complains to.
+        """
+        from loans.verification import disbursement_evidence
+
+        return Response(disbursement_evidence(self.get_object()))
+
+    @action(detail=True, methods=["post"], url_path="recheck-disbursement")
+    def recheck_disbursement(self, request, pk=None):
+        """Ask the provider directly, then report what it said.
+
+        A write, and privileged: the answer is applied through the same path as a
+        webhook, so a failed transfer reverses its journal and puts the loan back
+        to approved. That is money moving, not a lookup.
+        """
+        from payments.providers import PaymentInitError
+        from loans.verification import recheck_disbursement as _recheck
+
+        try:
+            evidence = _recheck(self.get_object(), actor=request.user)
+        except PaymentInitError as exc:
+            # The provider could not be reached. Say so plainly rather than
+            # letting it read as "not disbursed".
+            return Response({"detail": str(exc)}, status=502)
+        return Response(evidence)
+
     @action(detail=False, methods=["get"])
     def health(self, request):
         """Loans whose state does not add up, plus the awaiting-payment queue.
