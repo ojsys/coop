@@ -12,6 +12,8 @@ no business on a public page. An allowlist is the safer default here.
 """
 from __future__ import annotations
 
+from django.http import Http404, HttpResponseRedirect
+from django.urls import reverse
 from rest_framework import serializers
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -203,11 +205,22 @@ class PublicSiteContentView(PublicView):
                 "title": content.apps_title,
                 "body": content.apps_body,
                 "note": content.apps_note,
-                # A published store listing wins over a side-loaded APK, so
-                # uploading one does not strand members on the raw file.
-                "android_url": (content.android_store_url
-                                or url(content.android_apk)),
-                "ios_url": content.ios_store_url or None,
+                # Both point at the counting endpoint rather than at the file
+                # or the store, so a download can be measured. It redirects to
+                # whichever destination is configured — a published store
+                # listing still wins over a side-loaded APK, so uploading one
+                # does not strand members on the raw file.
+                "android_url": (
+                    request.build_absolute_uri(
+                        reverse("public-app-download",
+                                kwargs={"platform": "android"}))
+                    if (content.android_store_url or content.android_apk)
+                    else None),
+                "ios_url": (
+                    request.build_absolute_uri(
+                        reverse("public-app-download",
+                                kwargs={"platform": "ios"}))
+                    if content.ios_store_url else None),
                 "screenshot": url(content.app_screenshot),
                 "screenshot_alt": content.app_screenshot_alt,
             },
@@ -265,3 +278,57 @@ class PublicSubdivisionsView(PublicView):
             "country": code.upper(),
             "regions": subdivisions_payload(code),
         })
+
+
+class PublicAppDownloadView(APIView):
+    """`GET /public/app/<platform>/` — count a download, then hand it over.
+
+    The marketing page links here instead of straight at the APK, because a link
+    to a file in media cannot be measured. The redirect means the browser still
+    ends up downloading from the same place, so nothing is proxied through Django
+    and a large APK does not tie up a worker.
+
+    A store URL takes precedence over an uploaded APK: once the app is on Google
+    Play, members should land there for updates rather than side-loading a file
+    that will never update itself.
+
+    Counting is best-effort by design. If the tally write fails the download
+    still proceeds — a broken counter must never stop someone getting the app.
+    """
+
+    permission_classes = [AllowAny]
+
+    DESTINATIONS = {
+        "android": ("android_store_url", "android_apk"),
+        "ios": ("ios_store_url", None),
+    }
+
+    def get(self, request, platform: str):
+        from platform_admin.models import AppDownloadTally, SiteContent
+
+        if platform not in self.DESTINATIONS:
+            raise Http404("Unknown platform.")
+
+        content = SiteContent.objects.first()
+        if content is None:
+            raise Http404("No app has been published yet.")
+
+        store_field, file_field = self.DESTINATIONS[platform]
+        target = getattr(content, store_field, "") or ""
+        if not target and file_field:
+            uploaded = getattr(content, file_field, None)
+            target = uploaded.url if uploaded else ""
+        if not target:
+            raise Http404("No download is available for this platform.")
+
+        try:
+            AppDownloadTally.record(platform)
+        except Exception:                            # noqa: BLE001
+            # Never let a counter stand between a member and the app.
+            import logging
+
+            logging.getLogger("api.errors").warning(
+                "Could not record an app download for %s", platform,
+                exc_info=True)
+
+        return HttpResponseRedirect(target)

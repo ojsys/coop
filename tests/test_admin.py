@@ -45,6 +45,7 @@ from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
                                    ProviderCheck, ProviderStatus, SiteContent,
                                    SiteFeature, SiteGalleryImage, SiteShowcase,
                                    SiteStep, SiteTrustBadge, Subscription,
+                                   AppDownloadTally,
                                    SupportTicket)
 from savings.models import SavingsGoal, SavingsProduct, Withdrawal
 from tenants.models import BankDetailChange, Cooperative
@@ -269,6 +270,9 @@ def dataset(coop, member, dues_type, member_funds):
     SiteStep.objects.create(
         number="01", title="Onboard your society", body="We migrate your data.")
     SiteTrustBadge.objects.create(text="Append-only ledger with audit trail")
+    AppDownloadTally.objects.create(
+        platform=AppDownloadTally.Platform.ANDROID,
+        date=timezone.localdate(), count=3)
     SiteGalleryImage.objects.create(
         image="site_content/sample.png",
         alt_text="Members of a savings group at a monthly meeting",

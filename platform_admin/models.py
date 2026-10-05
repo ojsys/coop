@@ -552,6 +552,70 @@ ICON_CHOICES = [
 ]
 
 
+class AppDownloadTally(models.Model):
+    """How many times the mobile app was downloaded, per platform per day.
+
+    A daily tally rather than a row per download, and deliberately so: the
+    interesting question is "is adoption moving?", which a trend answers and a
+    log of individual events answers no better. Keeping counts also means this
+    table holds **no personal data at all** — no IP address, no user agent, no
+    member — so it needs no retention policy and cannot become an NDPA liability
+    for the sake of a number on a dashboard.
+
+    The total is the sum of the rows, not a separate counter, so there is nothing
+    that can drift out of step with the daily figures.
+
+    What it cannot tell you: a download is a click on the link, not an install.
+    Bots, link previews and browser prefetching all count, so read it as a
+    direction of travel rather than a user count.
+    """
+
+    class Platform(models.TextChoices):
+        ANDROID = "android", "Android"
+        IOS = "ios", "iOS"
+
+    platform = models.CharField(max_length=10, choices=Platform.choices)
+    date = models.DateField()
+    count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["platform", "date"],
+                                    name="uniq_app_download_per_day"),
+        ]
+        ordering = ["-date", "platform"]
+        verbose_name_plural = "App download tallies"
+
+    def __str__(self) -> str:
+        return f"{self.get_platform_display()} · {self.date} · {self.count}"
+
+    @classmethod
+    def record(cls, platform: str) -> None:
+        """Count one download. Safe under concurrency.
+
+        The increment is done in the database with ``F()`` rather than by reading
+        and saving, so two simultaneous downloads cannot overwrite each other and
+        lose a count.
+        """
+        from django.db.models import F
+        from django.utils import timezone
+
+        today = timezone.localdate()
+        obj, created = cls.objects.get_or_create(
+            platform=platform, date=today, defaults={"count": 1})
+        if not created:
+            cls.objects.filter(pk=obj.pk).update(count=F("count") + 1)
+
+    @classmethod
+    def total(cls, platform: str | None = None) -> int:
+        from django.db.models import Sum
+
+        rows = cls.objects.all()
+        if platform:
+            rows = rows.filter(platform=platform)
+        return rows.aggregate(n=Sum("count"))["n"] or 0
+
+
 class SiteContent(TimeStampedModel):
     """Singleton: the wording and imagery of the public landing page.
 

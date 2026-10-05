@@ -45,6 +45,7 @@ from platform_admin.views import (
 from core.public_views import (
     PublicBrandingView,
     PublicLegalDocumentView,
+    PublicAppDownloadView,
     PublicLegalIndexView,
     PublicPlansView,
     PublicReferenceView,
@@ -146,6 +147,9 @@ urlpatterns = [
     path("public/site-content/", PublicSiteContentView.as_view(),
          name="public-site-content"),
     # Policy pages an admin pastes in (privacy notice, terms, and so on).
+    # Counts the download, then redirects to the APK or the store listing.
+    path("public/app/<str:platform>/", PublicAppDownloadView.as_view(),
+         name="public-app-download"),
     path("public/legal/", PublicLegalIndexView.as_view(), name="public-legal"),
     path("public/legal/<slug:slug>/", PublicLegalDocumentView.as_view(),
          name="public-legal-document"),

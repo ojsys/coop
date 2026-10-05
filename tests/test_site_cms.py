@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+from urllib.parse import urlparse
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -289,33 +290,43 @@ def test_app_links_are_null_until_they_are_set(blank_cms):
     assert apps["ios_url"] is None
 
 
-def test_an_uploaded_apk_is_offered_when_there_is_no_store_listing():
+def test_an_uploaded_apk_is_offered_when_there_is_no_store_listing(client):
     content = SiteContent.load()
     content.android_apk = "site_apps/cooperativeos.apk"
     content.save()
 
     apps = APIClient().get(URL).json()["apps"]
     assert apps["android_url"], "the uploaded APK should be downloadable"
-    assert apps["android_url"].endswith(".apk")
+    # The link goes through the download counter rather than straight at the
+    # file, because a link to media cannot be measured. Following it must still
+    # reach the APK — that is what this test has always been about.
+    hop = client.get(urlparse(apps["android_url"]).path)
+    assert hop.status_code == 302
+    assert hop["Location"].endswith(".apk")
 
 
-def test_a_store_listing_wins_over_an_uploaded_apk():
+def test_a_store_listing_wins_over_an_uploaded_apk(client):
     """Publishing to the Play Store must not strand members on a raw file."""
     content = SiteContent.load()
     content.android_apk = "site_apps/cooperativeos.apk"
     content.android_store_url = "https://play.google.com/store/apps/details?id=x"
     content.save()
 
-    assert APIClient().get(URL).json()["apps"]["android_url"] == (
-        "https://play.google.com/store/apps/details?id=x")
+    link = APIClient().get(URL).json()["apps"]["android_url"]
+    hop = client.get(urlparse(link).path)
+
+    assert hop["Location"] == "https://play.google.com/store/apps/details?id=x"
 
 
-def test_ios_link_is_served_when_set():
+def test_ios_link_is_served_when_set(client):
     content = SiteContent.load()
     content.ios_store_url = "https://apps.apple.com/app/id123"
     content.save()
-    assert APIClient().get(URL).json()["apps"]["ios_url"] == (
-        "https://apps.apple.com/app/id123")
+
+    link = APIClient().get(URL).json()["apps"]["ios_url"]
+    hop = client.get(urlparse(link).path)
+
+    assert hop["Location"] == "https://apps.apple.com/app/id123"
 
 
 # ── Closing call to action ──────────────────────────────────────────────────

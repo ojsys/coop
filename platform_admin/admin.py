@@ -12,7 +12,8 @@ from django.contrib import admin, messages
 from django.db import models
 from django.utils.html import format_html
 
-from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
+from platform_admin.models import (AppDownloadTally, Domain, Incident,
+                                   Invoice, LegalDocument,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
@@ -538,3 +539,41 @@ class PlatformTeamMemberAdmin(admin.ModelAdmin):
     autocomplete_fields = ("user",)
     list_select_related = ("user",)
     readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(AppDownloadTally)
+class AppDownloadTallyAdmin(admin.ModelAdmin):
+    """How often the app is being downloaded, by day.
+
+    Read-only: the rows are counted by the public download endpoint, and a
+    hand-edited figure would be worse than no figure. Deleting is allowed —
+    these are statistics, not records of anything, and an operator may want to
+    discard a day skewed by their own testing.
+
+    Holds no personal data: a date and a count, nothing about who downloaded.
+    """
+
+    list_display = ("date", "platform", "count")
+    list_filter = ("platform", "date")
+    date_hierarchy = "date"
+    ordering = ("-date", "platform")
+    readonly_fields = ("platform", "date", "count")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        """Show the running totals, which is the number anyone actually wants."""
+        from platform_admin.models import AppDownloadTally as T
+
+        android, ios = T.total(T.Platform.ANDROID), T.total(T.Platform.IOS)
+        self.message_user(
+            request,
+            f"Total downloads so far — Android: {android:,} · iOS: {ios:,}. "
+            f"A download is a click on the link, not an install: bots and link "
+            f"previews are counted too.",
+            messages.INFO)
+        return super().changelist_view(request, extra_context)
