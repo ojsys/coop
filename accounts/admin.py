@@ -287,6 +287,15 @@ class MembershipAdminForm(forms.ModelForm):
                 changed.append(field)
         if changed:
             user.save(update_fields=changed + ["updated_at"])
+
+        # Same rule as the API: staff fixing a bank code here must refresh a
+        # pending loan's destination, or the loan stays unpayable and nothing
+        # says why.
+        if {"bank_name", "bank_code", "bank_account_no"} & set(
+                self.changed_data or ()):
+            from loans.services import refresh_pending_destinations
+
+            refresh_pending_destinations(membership)
         return membership
 
 

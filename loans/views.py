@@ -147,6 +147,28 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         data["payout_reference"] = payout.reference
         return Response(data)
 
+    @action(detail=True, methods=["post"], url_path="refresh-destination")
+    def refresh_destination(self, request, pk=None):
+        """Re-point an approved loan at the member's current bank details.
+
+        Needed because approval freezes the destination, which is the control
+        that stops a payout being redirected away from the account an officer
+        vetted — but also leaves a loan approved before the member had a usable
+        account permanently unpayable. The member fills in their bank code and
+        the loan still carries the blank snapshot it was approved with.
+
+        Privileged and audited: it changes where money will go, so it is an
+        explicit act by a named officer, never a side effect.
+        """
+        from loans.services import refresh_loan_destination
+
+        loan = self.get_object()
+        try:
+            refresh_loan_destination(loan, actor=request.user)
+        except LoanError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        return Response(self.get_serializer(loan).data)
+
     @action(detail=True, methods=["get"])
     def disbursement(self, request, pk=None):
         """Was this loan actually disbursed? The evidence, not just the status.

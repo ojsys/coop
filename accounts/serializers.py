@@ -186,9 +186,22 @@ class MembershipSerializer(serializers.ModelSerializer):
         if user_data:
             user.save()
 
+        bank_touched = any(
+            field in validated_data
+            for field in ("bank_name", "bank_code", "bank_account_no"))
+
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
+
+        # An officer correcting bank details must refresh a pending loan's
+        # destination exactly as the member's own edit does. Without this the
+        # same change had different effects depending on who made it, and an
+        # officer who fixed a missing bank code found the loan still unpayable.
+        if bank_touched:
+            from loans.services import refresh_pending_destinations
+
+            refresh_pending_destinations(instance)
         return instance
 
 
@@ -266,15 +279,9 @@ class MemberSelfSerializer(MembershipSerializer):
         if not any(field in validated_data for field in self.BANK_FIELDS):
             return membership
 
-        from loans.models import Loan
+        from loans.services import refresh_pending_destinations
 
-        pending = Loan.all_objects.filter(membership=membership,
-                                          status=Loan.Status.PENDING)
-        for loan in pending:
-            loan.snapshot_destination()
-            loan.save(update_fields=["destination_bank_name",
-                                     "destination_bank_code",
-                                     "destination_account_no", "updated_at"])
+        refresh_pending_destinations(membership)
         return membership
 
 

@@ -266,6 +266,96 @@ def _finalise_disbursement(loan, journal=None):
 
 
 @transaction.atomic
+def refresh_pending_destinations(membership) -> int:
+    """Re-snapshot every PENDING loan after this member's bank details changed.
+
+    While a loan is still pending, its destination is *meant* to track the
+    member: somebody who applied before supplying an account would otherwise be
+    left with a permanently blank destination and a loan that can never be paid.
+    From APPROVED onward the snapshot freezes, which is the control that stops a
+    payout being redirected away from the account an officer vetted.
+
+    Lives here rather than in a serializer because three different paths change a
+    member's bank details — the member's own profile, an officer through
+    /members/<id>/, and staff in the Django admin — and only the first one used to
+    do this. The result was behaviour that depended on *who* typed the details:
+    the same edit refreshed a pending loan or did not, with nothing on screen to
+    say which.
+
+    Returns how many loans were updated.
+    """
+    from loans.models import Loan
+
+    pending = Loan.all_objects.filter(membership=membership,
+                                      status=Loan.Status.PENDING)
+    updated = 0
+    for loan in pending:
+        loan.snapshot_destination()
+        loan.save(update_fields=["destination_bank_name",
+                                 "destination_bank_code",
+                                 "destination_account_no", "updated_at"])
+        updated += 1
+    return updated
+
+
+def refresh_loan_destination(loan, *, actor=None):
+    """Re-point an approved loan at the member's current bank details.
+
+    The deliberate counterpart to the freeze. Approval captures where the money
+    will go so that a member cannot redirect a vetted payout afterwards — but
+    that leaves a loan approved before the member had a usable account stuck
+    forever: the member supplies their bank code, and the loan still carries the
+    blank snapshot it was approved with, unpayable with nothing to act on.
+
+    So an officer may refresh it, as an explicit act that is audited with both
+    the old and the new destination. Never automatic: a payout destination that
+    changed quietly between approval and disbursement is precisely what the
+    freeze exists to prevent.
+
+    Refused once the money has gone — there is nothing left to redirect, and the
+    destination on a disbursed loan is the record of where it actually went.
+    """
+    from django.db import transaction
+
+    from audit.services import record_action
+    from loans.models import Loan
+
+    if loan.status not in (Loan.Status.PENDING, Loan.Status.APPROVED):
+        raise LoanError(
+            f"Loan {loan.pk} is {loan.get_status_display().lower()}. Its "
+            f"destination records where the money actually went and cannot be "
+            f"changed.")
+
+    before = {
+        "bank_name": loan.destination_bank_name,
+        "bank_code": loan.destination_bank_code,
+        "account_no": loan.destination_account_no,
+    }
+    loan.snapshot_destination()
+    after = {
+        "bank_name": loan.destination_bank_name,
+        "bank_code": loan.destination_bank_code,
+        "account_no": loan.destination_account_no,
+    }
+
+    if before == after:
+        # Nothing to record: saying "updated" when nothing moved would make the
+        # audit trail less trustworthy, not more complete.
+        return loan
+
+    with transaction.atomic():
+        loan.save(update_fields=["destination_bank_name",
+                                 "destination_bank_code",
+                                 "destination_account_no", "updated_at"])
+        record_action(
+            cooperative=loan.cooperative, actor=actor,
+            actor_label="" if actor else "System",
+            action="loan.refresh_destination", entity=loan,
+            before=before, after=after,
+        )
+    return loan
+
+
 def unwind_disbursement(loan, *, reason="", actor=None):
     """Undo a disbursement completely — the ledger entry included.
 

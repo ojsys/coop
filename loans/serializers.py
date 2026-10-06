@@ -71,6 +71,11 @@ class LoanSerializer(serializers.ModelSerializer):
                                          read_only=True)
     member_bank_name = serializers.CharField(source="membership.bank_name",
                                              read_only=True)
+    # Beside destination_bank_code on purpose. When the destination carries no
+    # code and the member now does, refreshing the frozen snapshot is what makes
+    # the loan payable — and the console can only offer that if it can see both.
+    member_bank_code = serializers.CharField(source="membership.bank_code",
+                                             read_only=True)
     member_bank_account_no = serializers.CharField(
         source="membership.bank_account_no", read_only=True)
     member_share_capital = serializers.DecimalField(
@@ -102,7 +107,8 @@ class LoanSerializer(serializers.ModelSerializer):
         model = Loan
         fields = ["id", "membership", "member_no", "member_name",
                   "member_phone", "member_email", "member_bank_name",
-                  "member_bank_account_no", "member_share_capital",
+                  "member_bank_code", "member_bank_account_no",
+                  "member_share_capital",
                   "member_photo", "product", "product_name", "principal",
                   "interest_rate", "term_months", "purpose", "status",
                   "status_display", "interest", "total_repayable", "outstanding",
