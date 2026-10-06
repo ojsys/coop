@@ -146,17 +146,100 @@ class MemberDocumentInline(TenantScopedTabularInline):
 
 
 class MembershipAdminForm(forms.ModelForm):
-    """Applies the last-officer rule to admin edits.
+    """The whole of a member's profile, on one page.
 
-    MembershipSerializer enforces it for the API, but the admin writes
-    Membership.role directly and would otherwise walk straight past it. It
-    belongs in the form rather than save_model: Django renders a form error,
-    whereas raising from save_model is an uncaught 500.
+    Two problems this solves.
+
+    **A profile spans two tables.** A person's name and phone live on ``User``
+    (one identity, possibly several cooperatives) while everything else lives on
+    ``Membership``. Staff asked to "change this member's phone number" therefore
+    could not do it from the member's own page — they had to know to go to Users
+    instead. ``full_name`` and ``phone`` below are mirrored onto the User record
+    on save, so the member's page is the one place to work.
+
+    Email is shown but not editable here on purpose: it is the login identity,
+    and changing it changes how someone signs in. ``MembershipSerializer`` makes
+    the same choice for the API. The link beside it goes to the User record,
+    where the change is a deliberate act rather than a side effect of correcting
+    an address.
+
+    **A bank code cannot be typed.** Paystack identifies a bank by code, and a
+    wrong one does not fail visibly — it points a payout at the wrong bank. So
+    when the catalogue has been loaded this is a dropdown; when it has not, it
+    falls back to a text field rather than offering an empty list, exactly as the
+    web console's BankSelect does.
+
+    Also applies the last-officer rule, which MembershipSerializer enforces for
+    the API: the admin writes Membership.role directly and would otherwise walk
+    straight past it. It belongs in the form rather than save_model, because
+    Django renders a form error whereas raising from save_model is a 500.
     """
+
+    full_name = forms.CharField(
+        max_length=200, required=False,
+        help_text="The person's name, stored on their user record.")
+    phone = forms.CharField(
+        max_length=20, required=False,
+        help_text="Stored on their user record, so it is the same in every "
+                  "cooperative they belong to.")
 
     class Meta:
         model = Membership
         fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = getattr(self.instance, "user", None)
+        if user is not None and self.instance.pk:
+            self.fields["full_name"].initial = user.full_name
+            self.fields["phone"].initial = user.phone
+        else:
+            # Creating a membership: the user is chosen from the picker above,
+            # and their name comes with them. Offering to type one here would
+            # imply it creates a person, which it does not.
+            for name in ("full_name", "phone"):
+                self.fields[name].disabled = True
+                self.fields[name].help_text = (
+                    "Available once the membership has been saved.")
+
+        self._configure_bank_code()
+
+    def _configure_bank_code(self):
+        """A dropdown where the catalogue is loaded, free text where it is not."""
+        if "bank_code" not in self.fields:
+            return
+        try:
+            from payments.models import Bank
+
+            banks = list(Bank.objects.filter(active=True)
+                         .values_list("code", "name"))
+        except Exception:                            # noqa: BLE001
+            # A missing table (mid-migration) must not break the member page.
+            banks = []
+
+        if not banks:
+            self.fields["bank_code"].help_text = (
+                "The bank catalogue has not been loaded on this server, so a "
+                "code cannot be chosen from a list. Load it from Payments → "
+                "Banks → “Refresh the catalogue from the provider”. Without a "
+                "code this member cannot receive an electronic payout."
+            )
+            return
+
+        current = self.instance.bank_code if self.instance.pk else ""
+        choices = [("", "— no bank —")] + [
+            (code, f"{name} ({code})") for code, name in banks
+        ]
+        # A stored code the provider has since dropped would vanish from the
+        # dropdown and be silently cleared on the next save.
+        if current and current not in dict(banks):
+            choices.insert(1, (current, f"{current} — no longer in the catalogue"))
+
+        self.fields["bank_code"] = forms.ChoiceField(
+            choices=choices, required=False, label="Bank",
+            help_text="Paystack's code for this bank. Payouts are created from "
+                      "the code, not the name.",
+        )
 
     def clean(self):
         cleaned = super().clean()
@@ -180,6 +263,32 @@ class MembershipAdminForm(forms.ModelForm):
             raise forms.ValidationError(str(exc)) from exc
         return cleaned
 
+    def save(self, commit=True):
+        """Persist the mirrored User fields alongside the membership.
+
+        Only touched when they actually changed, so saving a membership whose
+        person is unchanged does not write to the User table — and two officers
+        editing different memberships of the same person cannot clobber each
+        other's unrelated edits.
+        """
+        membership = super().save(commit=commit)
+
+        user = membership.user if membership.pk else None
+        if user is None or not commit:
+            return membership
+
+        changed = []
+        for field in ("full_name", "phone"):
+            if field not in self.fields or self.fields[field].disabled:
+                continue
+            value = self.cleaned_data.get(field, "")
+            if value != getattr(user, field):
+                setattr(user, field, value)
+                changed.append(field)
+        if changed:
+            user.save(update_fields=changed + ["updated_at"])
+        return membership
+
 
 @admin.register(Membership)
 class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
@@ -194,13 +303,20 @@ class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     date_hierarchy = "joined_at"
     autocomplete_fields = ("cooperative", "user", "role")
     list_select_related = ("user", "role", "cooperative")
-    readonly_fields = ("savings_balance", "photo_preview", "created_at",
-                       "updated_at")
+    readonly_fields = ("savings_balance", "photo_preview", "email_link",
+                       "created_at", "updated_at")
     inlines = (MemberDocumentInline,)
 
     fieldsets = (
         (None, {
             "fields": ("cooperative", "user", "member_no", "role", "status"),
+        }),
+        ("Person", {
+            "description": "Name and phone are stored on the user record, so a "
+                           "change here applies in every cooperative this "
+                           "person belongs to. Email is the login identity and "
+                           "is changed on the user record itself.",
+            "fields": ("full_name", "phone", "email_link"),
         }),
         ("Membership", {
             "fields": ("share_capital", "savings_balance", "joined_at",
@@ -209,18 +325,39 @@ class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
         ("Profile", {
             "fields": ("photo", "photo_preview", "occupation"),
         }),
+        ("Payout destination", {
+            "description": "A transfer recipient is created from the bank "
+                           "<em>code</em> and the account number. Without a "
+                           "code this member cannot be paid electronically and "
+                           "their approved loans will sit in the console's "
+                           "awaiting-payment queue.",
+            "fields": ("bank_code", "bank_name", "bank_account_no"),
+        }),
         ("Sensitive (NDPA)", {
             "classes": ("collapse",),
             "description": "Regulated personal data — access is audited.",
             "fields": ("date_of_birth", "gender", "address",
-                       "next_of_kin_name", "next_of_kin_phone",
-                       "bank_name", "bank_account_no"),
+                       "next_of_kin_name", "next_of_kin_phone"),
         }),
         ("Timestamps", {
             "classes": ("collapse",),
             "fields": ("created_at", "updated_at"),
         }),
     )
+
+    @admin.display(description="Email")
+    def email_link(self, obj):
+        """The login address, with a way to reach the record that owns it."""
+        from django.urls import reverse
+        from django.utils.html import format_html
+
+        if obj.pk is None or obj.user_id is None:
+            return "—"
+        return format_html(
+            '{} · <a href="{}">edit this person\u2019s user record</a>',
+            obj.user.email,
+            reverse("admin:accounts_user_change", args=[obj.user_id]),
+        )
 
     def get_queryset(self, request):
         # Member funds in one aggregate; Membership.savings_balance queries the
