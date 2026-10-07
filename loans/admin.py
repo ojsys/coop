@@ -11,6 +11,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from django import forms
+from django.conf import settings
 from django.contrib import admin, messages
 from django.core.exceptions import ValidationError
 from django.db.models import DecimalField, Q, Sum, Value
@@ -296,3 +297,69 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     list_select_related = ("loan", "cooperative")
     # The journal is written by the repayment service.
     readonly_fields = ("journal", "created_at", "updated_at")
+
+    actions = ("recheck_selected",)
+    # Settling a repayment posts to the ledger.
+    two_factor_actions = ("recheck_selected",)
+
+    @admin.action(description="Recheck online payment with the provider")
+    def recheck_selected(self, request, queryset):
+        """Settle pending online repayments the provider reports as paid.
+
+        For the member who paid and closed the tab before returning: the money
+        was taken but the repayment stayed pending. Goes through
+        ``verify_loan_payment``, the same path as the member's own return, so
+        the two cannot disagree. Bank-transfer claims are skipped — they are
+        checked against the society's account, not the provider.
+        """
+        from payments.providers import PaymentInitError
+        from payments.services import provider_is_simulated, verify_loan_payment
+
+        if provider_is_simulated() and not settings.DEBUG:
+            self.message_user(
+                request,
+                "No live payment key is configured, so the provider would "
+                "report every payment as paid. Nothing was changed.",
+                messages.ERROR)
+            return
+
+        settled = waiting = skipped = 0
+        for repayment in queryset.select_related("cooperative"):
+            if (repayment.status != LoanRepayment.Status.PENDING
+                    or repayment.channel != LoanRepayment.Channel.PSP
+                    or not repayment.psp_reference):
+                skipped += 1
+                continue
+
+            reference = repayment.psp_reference
+            try:
+                result = verify_loan_payment(repayment.cooperative, reference)
+            except PaymentInitError as exc:
+                self.message_user(
+                    request, f"{reference}: could not reach the provider — "
+                    f"{exc}", messages.ERROR)
+                continue
+
+            if result is None:
+                settled += 1
+                self.message_user(
+                    request, f"{reference}: paid, but the loan was already "
+                    f"fully repaid, so nothing was posted. Refund the member.",
+                    messages.WARNING)
+            elif result.status == LoanRepayment.Status.CONFIRMED:
+                settled += 1
+                self.message_user(
+                    request, f"{reference}: pending → confirmed. "
+                    f"{result.amount:,.2f} posted to loan #{result.loan_id}.",
+                    messages.SUCCESS)
+            else:
+                waiting += 1
+
+        if waiting:
+            self.message_user(
+                request, f"{waiting} repayment(s) are not paid at the provider "
+                f"yet, so they stay pending.", messages.INFO)
+        if skipped:
+            self.message_user(
+                request, f"Skipped {skipped} repayment(s) that are already "
+                f"confirmed or are not online payments.", messages.INFO)

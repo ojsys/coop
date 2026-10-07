@@ -513,6 +513,48 @@ def confirm_wallet_topup(cooperative, reference, *, actor=None):
     Returns the top-up unchanged when the charge did not succeed, so a cancelled
     checkout leaves a PENDING record and no ledger entry.
     """
+    from payments.models import WalletTopUp
+
+    topup = WalletTopUp.all_objects.filter(
+        cooperative=cooperative, psp_reference=reference).first()
+    if topup is None:
+        return None
+    return recheck_wallet_topup(topup, actor=actor)
+
+
+def provider_is_simulated(provider_name=Provider.PAYSTACK) -> bool:
+    """True when there is no live key and the provider only pretends.
+
+    With the dev placeholder key ``fetch_transaction`` reports *every* reference
+    as paid, which keeps the demo flow working but would credit unpaid top-ups
+    if a bulk recheck ran against it. Bulk callers check this first.
+    """
+    secret = settings.PAYSTACK_SECRET_KEY if provider_name == Provider.PAYSTACK \
+        else ""
+    return not secret or secret.startswith("sk_test_dev")
+
+
+@transaction.atomic
+def recheck_wallet_topup(topup, *, actor=None):
+    """Ask the provider what happened to a top-up, and apply the answer.
+
+    The one path every confirmation takes — the officer's return from checkout,
+    the ``charge.success`` webhook, the admin's recheck action and the
+    ``recheck_pending_payments`` command — so they cannot disagree about whether
+    the money arrived.
+
+    It exists because the return from checkout is the only thing that used to
+    confirm a top-up. An officer who paid and then closed the tab, or whose
+    connection dropped on the way back, left a PENDING row and an uncredited
+    wallet although the provider held the money.
+
+    Only a definitive ``failed`` marks the row FAILED. "abandoned" and the like
+    mean the checkout has not completed *yet* — Paystack lets a payer resume it
+    — so those stay PENDING and can be rechecked later.
+
+    The row is locked first: a webhook and an officer's verify can arrive
+    together, and the wallet must be credited once.
+    """
     from decimal import Decimal
 
     from django.utils import timezone
@@ -521,15 +563,25 @@ def confirm_wallet_topup(cooperative, reference, *, actor=None):
     from ledger.services import Line, post_journal
     from payments.models import WalletTopUp
 
-    topup = WalletTopUp.all_objects.filter(
-        cooperative=cooperative, psp_reference=reference).first()
-    if topup is None:
-        return None
-    if topup.is_confirmed:
+    topup = WalletTopUp.all_objects.select_for_update().get(pk=topup.pk)
+    if topup.status != WalletTopUp.Status.PENDING:
         return topup
 
+    cooperative = topup.cooperative
+    reference = topup.psp_reference
     detail = get_provider(topup.provider).fetch_transaction(reference)
-    if detail is None or not detail.get("success"):
+    if detail is None:
+        return topup
+    if not detail.get("success"):
+        if detail.get("status") == "failed":
+            topup.status = WalletTopUp.Status.FAILED
+            topup.save(update_fields=["status", "updated_at"])
+            record_action(
+                cooperative=cooperative, actor=actor,
+                actor_label="" if actor else "System",
+                action="wallet.topup_failed", entity=topup,
+                after={"reference": reference},
+            )
         return topup
 
     gross = detail.get("amount") or topup.amount
@@ -809,6 +861,16 @@ def _resolve_cooperative(event: NormalizedEvent):
         if repayment is not None:
             return repayment.cooperative
 
+        from payments.models import WalletTopUp
+
+        topup = (
+            WalletTopUp.all_objects
+            .filter(provider=event.provider, psp_reference=event.reference)
+            .select_related("cooperative").first()
+        )
+        if topup is not None:
+            return topup.cooperative
+
     return None
 
 
@@ -856,7 +918,8 @@ def ingest_webhook(*, provider_name: str, raw_body: bytes, headers) -> PaymentEv
         payment.status = PaymentEvent.Status.UNMATCHED
         payment.note = (
             "Could not route to a cooperative: no known subaccount, and the "
-            "reference matches no contribution or loan repayment."
+            "reference matches no contribution, loan repayment or wallet "
+            "top-up."
         )
         payment.save()
         return payment
@@ -882,6 +945,9 @@ def ingest_webhook(*, provider_name: str, raw_body: bytes, headers) -> PaymentEv
 @transaction.atomic
 def reconcile_event(payment: PaymentEvent) -> PaymentEvent:
     """Match a received settlement to an expected contribution and classify it."""
+    if _reconcile_wallet_topup(payment) or _reconcile_loan_repayment(payment):
+        return payment
+
     contribution = Contribution.all_objects.filter(
         cooperative=payment.cooperative, psp_reference=payment.reference,
     ).first()
@@ -912,6 +978,99 @@ def reconcile_event(payment: PaymentEvent) -> PaymentEvent:
     payment.save(update_fields=["status", "matched_contribution", "note",
                                 "updated_at"])
     return payment
+
+
+def _reconcile_wallet_topup(payment: PaymentEvent) -> bool:
+    """Settle a wallet top-up from its ``charge.success`` webhook.
+
+    Returns ``False`` when the reference is not a top-up, leaving the event to
+    the contribution matching below. Without this branch the webhook for a
+    top-up was filed as unmatched and the top-up stayed PENDING unless the
+    officer happened to come back through the checkout's return URL.
+
+    The webhook's own amount is not booked: ``recheck_wallet_topup`` asks the
+    provider, because only the provider's verify reports the fee it deducted.
+    """
+    from payments.models import WalletTopUp
+    from payments.providers import PaymentInitError
+
+    topup = WalletTopUp.all_objects.filter(
+        cooperative=payment.cooperative, provider=payment.provider,
+        psp_reference=payment.reference).first()
+    if topup is None:
+        return False
+
+    was_pending = topup.status == WalletTopUp.Status.PENDING
+    try:
+        topup = recheck_wallet_topup(topup)
+    except (PaymentInitError, WalletError) as exc:
+        # The webhook must still be acknowledged and recorded; the top-up stays
+        # PENDING for the admin recheck to pick up.
+        payment.status = PaymentEvent.Status.UNMATCHED
+        payment.note = f"Wallet top-up {topup.psp_reference}: {exc}"[:255]
+    else:
+        if topup.is_confirmed and was_pending:
+            payment.status = PaymentEvent.Status.MATCHED
+            payment.note = f"Wallet top-up {topup.psp_reference} confirmed."
+        elif topup.is_confirmed:
+            payment.status = PaymentEvent.Status.DUPLICATE
+            payment.note = "Wallet top-up already confirmed."
+        else:
+            payment.status = PaymentEvent.Status.UNMATCHED
+            payment.note = (f"Wallet top-up {topup.psp_reference} is still "
+                            f"{topup.status} at the provider.")
+
+    payment.save(update_fields=["status", "note", "updated_at"])
+    return True
+
+
+def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
+    """Settle an online loan repayment from its ``charge.success`` webhook.
+
+    Returns ``False`` when the reference is not an online repayment, leaving
+    the event to the contribution matching below. Without this branch the
+    webhook for a repayment was filed as unmatched, and the repayment settled
+    only if the member came back through the checkout's return URL — one who
+    paid and closed the tab stayed in arrears with the money already taken.
+
+    Only ``psp`` repayments are considered: a member-reported bank transfer
+    carries the member's own teller reference, which is not ours and must not
+    be settled by a webhook. Classified the same way as a contribution, so a
+    settled amount that differs is left for an operator rather than guessed at.
+    """
+    from loans.models import LoanRepayment
+    from loans.services import confirm_loan_repayment
+
+    repayments = LoanRepayment.all_objects.filter(
+        cooperative=payment.cooperative, psp_reference=payment.reference,
+        channel=LoanRepayment.Channel.PSP)
+    repayment = (repayments.filter(status=LoanRepayment.Status.PENDING).first()
+                 or repayments.first())
+    if repayment is None:
+        return False
+
+    if repayment.status == LoanRepayment.Status.CONFIRMED:
+        payment.status = PaymentEvent.Status.DUPLICATE
+        payment.note = "Loan repayment already settled."
+    elif payment.amount != repayment.amount:
+        payment.status = PaymentEvent.Status.PARTIAL
+        payment.note = (
+            f"Loan repayment amount mismatch: settled {payment.amount} vs "
+            f"expected {repayment.amount}.")
+    else:
+        settled = confirm_loan_repayment(repayment)
+        if settled is None:
+            # The loan was already paid off by other repayments, so the money
+            # arrived with nothing to apply it to: an operator must refund it.
+            payment.status = PaymentEvent.Status.UNMATCHED
+            payment.note = ("Loan repayment arrived after the loan was "
+                            "fully repaid; nothing was posted.")
+        else:
+            payment.status = PaymentEvent.Status.MATCHED
+            payment.note = f"Loan repayment for loan #{settled.loan_id}."
+
+    payment.save(update_fields=["status", "note", "updated_at"])
+    return True
 
 
 def reconciliation_summary(cooperative, *, since=None, until=None) -> dict:

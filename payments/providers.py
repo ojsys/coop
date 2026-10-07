@@ -89,8 +89,11 @@ class BaseProvider:
         money reaches the balance, so the ledger needs the **actual** fee and
         settled amount, not the amount we asked for.
 
-        Returns ``{"success": bool, "amount": Decimal, "fee": Decimal}`` in
-        major units, or ``None`` when the reference is unknown.
+        Returns ``{"success": bool, "status": str, "amount": Decimal,
+        "fee": Decimal}`` in major units, or ``None`` when the reference is
+        unknown. ``status`` is the provider's own word for the charge
+        ("success", "failed", "abandoned", ...), so a caller can tell a charge
+        that definitively failed from one that simply has not completed yet.
         """
         raise NotImplementedError
 
@@ -307,7 +310,8 @@ class PaystackProvider(BaseProvider):
         """
         secret = settings.PAYSTACK_SECRET_KEY
         if not secret or secret.startswith("sk_test_dev"):
-            return {"success": True, "amount": None, "fee": Decimal("0.00")}
+            return {"success": True, "status": "success", "amount": None,
+                    "fee": Decimal("0.00")}
 
         try:
             resp = requests.get(
@@ -327,6 +331,7 @@ class PaystackProvider(BaseProvider):
         hundred = Decimal("100")
         return {
             "success": data.get("status") == "success",
+            "status": str(data.get("status") or "").lower(),
             # Paystack reports both in kobo.
             "amount": Decimal(str(data.get("amount", 0))) / hundred,
             "fee": Decimal(str(data.get("fees") or 0)) / hundred,

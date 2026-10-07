@@ -646,6 +646,24 @@ def confirm_loan_repayment(repayment, *, actor=None):
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         return repayment
 
+    # Locked, because the member's return from checkout and the provider's
+    # webhook can both arrive for the same payment, and each would otherwise
+    # post the repayment once.
+    locked = (LoanRepayment.all_objects.select_for_update()
+              .filter(pk=repayment.pk).first())
+    if locked is None:
+        # The other caller got here first and replaced the placeholder with
+        # the settled record.
+        if not repayment.psp_reference:
+            return None
+        return LoanRepayment.all_objects.filter(
+            cooperative_id=repayment.cooperative_id,
+            psp_reference=repayment.psp_reference,
+            status=LoanRepayment.Status.CONFIRMED).first()
+    repayment = locked
+    if repayment.status == LoanRepayment.Status.CONFIRMED:
+        return repayment
+
     loan = repayment.loan
     amount = repayment.amount
     # Re-check against the live outstanding (another repayment may have landed).

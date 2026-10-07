@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 
+from django.conf import settings
 from django.contrib import admin, messages
 from django.utils.html import format_html
 
@@ -115,10 +116,15 @@ class WalletTopUpAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     amounts by hand would put the wallet balance out of step with the money
     actually held at the provider, and the wallet is what disbursements draw
     on. Corrections belong in the ledger, by reversal.
+
+    What *can* be done is to ask the provider. A top-up used to be confirmed
+    only when the officer came back through the checkout's return URL, so one
+    who paid and closed the tab left a row stuck on "pending" while the money
+    sat at the provider. The recheck action applies the provider's answer.
     """
 
     list_display = ("psp_reference", "cooperative", "amount", "fee",
-                    "net_amount", "status", "confirmed_at")
+                    "net_amount", "status", "created_at", "confirmed_at")
     list_filter = ("status", "provider", "cooperative")
     search_fields = ("psp_reference",)
     date_hierarchy = "created_at"
@@ -127,6 +133,71 @@ class WalletTopUpAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
                        "currency", "status", "provider", "psp_reference",
                        "initiated_by", "journal", "confirmed_at",
                        "created_at", "updated_at")
+
+    actions = ("recheck_selected",)
+    # Credits the wallet the society lends from, so it is a money action.
+    two_factor_actions = ("recheck_selected",)
+
+    @admin.action(description="Recheck with the provider")
+    def recheck_selected(self, request, queryset):
+        """Ask the provider about each pending top-up and apply the answer.
+
+        The same ``recheck_wallet_topup`` the officer's return from checkout
+        and the webhook use, so the admin cannot credit a wallet the console
+        would not.
+        """
+        from payments.models import WalletTopUp
+        from payments.providers import PaymentInitError
+        from payments.services import (WalletError, provider_is_simulated,
+                                       recheck_wallet_topup)
+
+        if provider_is_simulated() and not settings.DEBUG:
+            self.message_user(
+                request,
+                "No live payment key is configured, so the provider would "
+                "report every top-up as paid. Nothing was changed.",
+                messages.ERROR)
+            return
+
+        asked = changed = skipped = 0
+        for topup in queryset:
+            if topup.status != WalletTopUp.Status.PENDING:
+                skipped += 1
+                continue
+
+            reference = topup.psp_reference
+            try:
+                topup = recheck_wallet_topup(topup, actor=request.user)
+            except (PaymentInitError, WalletError) as exc:
+                self.message_user(
+                    request, f"{reference}: could not be confirmed — {exc}",
+                    messages.ERROR)
+                continue
+
+            asked += 1
+            if topup.is_confirmed:
+                changed += 1
+                self.message_user(
+                    request,
+                    f"{reference}: pending → confirmed. {topup.net_amount:,.2f} "
+                    f"credited to {topup.cooperative}'s wallet "
+                    f"(fee {topup.fee:,.2f}).", messages.SUCCESS)
+            elif topup.status == WalletTopUp.Status.FAILED:
+                changed += 1
+                self.message_user(
+                    request, f"{reference}: pending → failed. Nothing was "
+                    f"credited.", messages.WARNING)
+
+        if asked > changed:
+            self.message_user(
+                request,
+                f"{asked - changed} top-up(s) are still not paid at the "
+                f"provider, so they stay pending.", messages.INFO)
+        if skipped:
+            self.message_user(
+                request,
+                f"Skipped {skipped} top-up(s) that are already confirmed or "
+                f"failed.", messages.INFO)
 
     def has_add_permission(self, request):
         return False

@@ -229,3 +229,130 @@ def test_a_new_society_gets_both_accounts_at_provisioning(coop):
     assert account_balance(
         Account.all_objects.get(cooperative=coop, code="1020")
     ) == Decimal("0.00")
+
+
+# ── Pending top-ups the provider has already been paid for ─────────────────
+# A top-up used to be confirmed only by the officer's return from checkout. One
+# who paid and closed the tab left it PENDING with the money at the provider.
+def _stub_status(monkeypatch, status, *, amount="50000", fee="0.00"):
+    from payments import services
+    from payments.providers import PaystackProvider
+
+    # The real provider, so a webhook's signature is still verified; only the
+    # question "what happened to this charge" is answered here.
+    class _Stub(PaystackProvider):
+        calls = 0
+
+        def fetch_transaction(self, reference):
+            _Stub.calls += 1
+            return {"success": status == "success", "status": status,
+                    "amount": Decimal(amount), "fee": Decimal(fee)}
+
+    monkeypatch.setattr(services, "get_provider", lambda name: _Stub())
+    return _Stub
+
+
+def _pending_topup(coop, reference="WLT-STUCK-1", amount="50000.00"):
+    return WalletTopUp.all_objects.create(
+        cooperative=coop, amount=Decimal(amount), psp_reference=reference)
+
+
+def test_a_recheck_confirms_a_topup_the_provider_was_paid_for(coop,
+                                                              monkeypatch):
+    from payments.services import recheck_wallet_topup
+
+    _stub_status(monkeypatch, "success", fee="750.00")
+    topup = recheck_wallet_topup(_pending_topup(coop))
+
+    assert topup.is_confirmed
+    assert topup.net_amount == Decimal("49250.00")
+    assert wallet_balance(coop) == Decimal("49250.00")
+
+
+def test_a_recheck_never_credits_twice(coop, monkeypatch):
+    from payments.services import recheck_wallet_topup
+
+    stub = _stub_status(monkeypatch, "success")
+    topup = _pending_topup(coop)
+    recheck_wallet_topup(topup)
+    recheck_wallet_topup(topup)
+
+    assert wallet_balance(coop) == Decimal("50000.00")
+    assert stub.calls == 1, "a confirmed top-up must not be re-asked"
+
+
+def test_an_abandoned_checkout_stays_pending(coop, monkeypatch):
+    """Paystack lets a payer resume an abandoned checkout, so it is not final."""
+    from payments.services import recheck_wallet_topup
+
+    _stub_status(monkeypatch, "abandoned")
+    topup = recheck_wallet_topup(_pending_topup(coop))
+
+    assert topup.status == WalletTopUp.Status.PENDING
+    assert wallet_balance(coop) == Decimal("0.00")
+
+
+def test_a_failed_charge_is_marked_failed(coop, monkeypatch):
+    from payments.services import recheck_wallet_topup
+
+    _stub_status(monkeypatch, "failed")
+    topup = recheck_wallet_topup(_pending_topup(coop))
+
+    assert topup.status == WalletTopUp.Status.FAILED
+    assert topup.journal is None
+
+
+def test_the_webhook_confirms_a_topup(coop, monkeypatch):
+    """Previously filed as unmatched, leaving the top-up pending."""
+    import hashlib
+    import hmac
+    import json
+
+    from django.conf import settings
+
+    from payments.models import PaymentEvent
+    from payments.services import ingest_webhook
+
+    _stub_status(monkeypatch, "success", fee="750.00")
+    topup = _pending_topup(coop, reference="WLT-HOOK-1")
+    body = json.dumps({"event": "charge.success", "data": {
+        "id": "hook-1", "reference": "WLT-HOOK-1", "amount": 5000000,
+        "currency": "NGN", "status": "success"}}).encode()
+    sig = hmac.new(settings.PAYSTACK_SECRET_KEY.encode(), body,
+                   hashlib.sha512).hexdigest()
+
+    event = ingest_webhook(provider_name="paystack", raw_body=body,
+                           headers={"x-paystack-signature": sig})
+
+    topup.refresh_from_db()
+    assert event.cooperative_id == coop.id
+    assert event.status == PaymentEvent.Status.MATCHED
+    assert topup.is_confirmed
+    assert wallet_balance(coop) == Decimal("49250.00")
+
+
+def test_the_command_confirms_stuck_topups(coop, monkeypatch, settings):
+    from django.core.management import call_command
+
+    settings.PAYSTACK_SECRET_KEY = "sk_live_real"
+    _stub_status(monkeypatch, "success")
+    topup = _pending_topup(coop)
+
+    call_command("recheck_pending_payments")
+
+    topup.refresh_from_db()
+    assert topup.is_confirmed
+
+
+def test_the_command_refuses_a_simulated_provider(coop, settings):
+    """Without a live key every reference "succeeds" — crediting on that would
+    put money in the wallet that was never paid."""
+    from django.core.management import call_command
+
+    settings.PAYSTACK_SECRET_KEY = "sk_test_dev"
+    topup = _pending_topup(coop)
+
+    call_command("recheck_pending_payments")
+
+    topup.refresh_from_db()
+    assert topup.status == WalletTopUp.Status.PENDING

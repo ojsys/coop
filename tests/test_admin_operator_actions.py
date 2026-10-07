@@ -26,8 +26,8 @@ from django.utils import timezone
 
 from accounts.models import User
 from core.context import use_tenant
-from payments.admin import BankAdmin, PayoutAdmin
-from payments.models import Bank, Payout
+from payments.admin import BankAdmin, PayoutAdmin, WalletTopUpAdmin
+from payments.models import Bank, Payout, WalletTopUp
 
 pytestmark = pytest.mark.django_db
 
@@ -178,6 +178,40 @@ def test_the_payout_page_stays_uneditable(operator):
 
 def test_rechecking_is_hidden_without_2fa(no_2fa):
     admin = PayoutAdmin(Payout, AdminSite())
+
+    assert "recheck_selected" not in admin.get_actions(_request(no_2fa))
+
+
+# ── Wallet top-up: rechecking from the admin ────────────────────────────────
+def test_an_operator_can_confirm_a_paid_but_pending_topup(coop, operator,
+                                                         monkeypatch):
+    """The officer paid, closed the tab, and the wallet was never credited."""
+    from payments import services
+
+    topup = WalletTopUp.all_objects.create(
+        cooperative=coop, amount=Decimal("20000.00"),
+        psp_reference="WLT-ADMIN-1")
+
+    class _Stub:
+        def fetch_transaction(self, reference):
+            return {"success": True, "status": "success",
+                    "amount": Decimal("20000.00"), "fee": Decimal("300.00")}
+
+    monkeypatch.setattr(services, "get_provider", lambda n: _Stub())
+    monkeypatch.setattr(services, "provider_is_simulated", lambda *a: False)
+    request = _request(operator)
+
+    WalletTopUpAdmin(WalletTopUp, AdminSite()).recheck_selected(
+        request, WalletTopUp.all_objects.filter(pk=topup.pk))
+
+    topup.refresh_from_db()
+    assert topup.is_confirmed
+    assert topup.net_amount == Decimal("19700.00")
+    assert any("pending → confirmed" in m for m in request.collected)
+
+
+def test_topup_recheck_is_hidden_without_2fa(no_2fa):
+    admin = WalletTopUpAdmin(WalletTopUp, AdminSite())
 
     assert "recheck_selected" not in admin.get_actions(_request(no_2fa))
 
