@@ -692,6 +692,51 @@ def confirm_loan_repayment(repayment, *, actor=None):
     return settled
 
 
+def _reallocate_schedule(loan):
+    """Make the instalments reflect exactly the confirmed repayments.
+
+    Allocation is always oldest-instalment-first, so clearing it and replaying
+    the confirmed repayments in order reproduces the state they alone produce —
+    dropping anything a reversed or never-paid repayment had marked paid.
+    """
+    from loans.models import LoanRepayment, RepaymentInstalment
+
+    RepaymentInstalment.all_objects.filter(loan=loan).update(
+        amount_paid=ZERO, status=RepaymentInstalment.Status.PENDING)
+    for kept in (LoanRepayment.all_objects
+                 .filter(loan=loan, status=LoanRepayment.Status.CONFIRMED)
+                 .order_by("created_at", "id")):
+        _allocate(loan, kept.amount)
+
+
+@transaction.atomic
+def reopen_repaid_loan(loan, *, actor=None):
+    """Return a loan marked REPAID to DISBURSED if money is still owed.
+
+    Returns ``True`` if it was reopened. Moves no money and posts nothing: the
+    balance is derived from confirmed repayments, so only the label and the
+    schedule were wrong. Reopening is what lets the member repay again.
+    """
+    from loans.models import Loan
+
+    loan.refresh_from_db()
+    if loan.status != Loan.Status.REPAID or loan.outstanding <= ZERO:
+        return False
+    from audit.services import record_action
+
+    _reallocate_schedule(loan)
+    loan.status = Loan.Status.DISBURSED
+    loan.save(update_fields=["status", "updated_at"])
+    record_action(
+        cooperative=loan.cooperative, actor=actor,
+        actor_label="" if actor else "System",
+        action="loan.reopened", entity=loan,
+        before={"status": Loan.Status.REPAID},
+        after={"status": loan.status, "outstanding": str(loan.outstanding)},
+    )
+    return True
+
+
 @transaction.atomic
 def reverse_repayment(repayment, *, reason, actor=None):
     """Undo a repayment that was posted in error, everywhere it took effect.
@@ -717,7 +762,7 @@ def reverse_repayment(repayment, *, reason, actor=None):
     from communications.models import Notification
     from communications.services import notify_member
     from ledger.services import reverse_journal
-    from loans.models import Loan, LoanRepayment, RepaymentInstalment
+    from loans.models import Loan, LoanRepayment
 
     repayment = LoanRepayment.all_objects.select_for_update().get(
         pk=repayment.pk)
@@ -736,18 +781,9 @@ def reverse_repayment(repayment, *, reason, actor=None):
                                   "reversal_reason", "reversed_at",
                                   "updated_at"])
 
-    RepaymentInstalment.all_objects.filter(loan=loan).update(
-        amount_paid=ZERO, status=RepaymentInstalment.Status.PENDING)
-    remaining = (LoanRepayment.all_objects
-                 .filter(loan=loan, status=LoanRepayment.Status.CONFIRMED)
-                 .order_by("created_at", "id"))
-    for kept in remaining:
-        _allocate(loan, kept.amount)
-
     before = loan.status
-    if loan.status == Loan.Status.REPAID and loan.outstanding > ZERO:
-        loan.status = Loan.Status.DISBURSED
-        loan.save(update_fields=["status", "updated_at"])
+    _reallocate_schedule(loan)
+    reopen_repaid_loan(loan, actor=actor)
 
     notify_member(
         loan.membership, kind=Notification.Kind.LOAN,

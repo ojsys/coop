@@ -37,6 +37,7 @@ PAYOUT_FAILED_STILL_DISBURSED = "payout_failed_still_disbursed"
 PAYOUT_UNCONFIRMED = "payout_unconfirmed"
 MISSING_SCHEDULE = "missing_schedule"
 SETTLED_NOT_MARKED_REPAID = "settled_not_marked_repaid"
+REPAID_WITH_BALANCE = "repaid_with_balance"
 APPROVED_WITH_SUCCESSFUL_PAYOUT = "approved_with_successful_payout"
 
 
@@ -163,6 +164,21 @@ def loan_health(cooperative=None, *, unconfirmed_after=UNCONFIRMED_AFTER) -> dic
                     "Approved but not yet paid", why, fix, False)
             continue
 
+        if loan.status == Loan.Status.REPAID:
+            # The inverse of SETTLED_NOT_MARKED_REPAID, and the worse one: the
+            # member is shown "Repaid" and cannot pay, while the books still
+            # say they owe. Left behind when a repayment that never arrived is
+            # reversed, or when a loan was closed by hand.
+            if loan.outstanding > ZERO:
+                add(loan, REPAID_WITH_BALANCE, "critical",
+                    "Marked repaid but money is still owed",
+                    f"{loan.outstanding:,.2f} is outstanding, yet the loan is "
+                    f"closed, so the member cannot make a repayment.",
+                    "Reopen it as disbursed. No money moves: the balance comes "
+                    "only from confirmed repayments.",
+                    True)
+            continue
+
         if loan.status != Loan.Status.DISBURSED:
             continue
 
@@ -281,6 +297,13 @@ def fix_finding(finding: Finding, *, actor=None) -> str:
         elif finding.code == MISSING_SCHEDULE:
             rows = build_schedule(loan)
             done = f"rebuilt the schedule ({len(rows)} instalments)"
+
+        elif finding.code == REPAID_WITH_BALANCE:
+            from loans.services import reopen_repaid_loan
+
+            if not reopen_repaid_loan(loan):
+                return "nothing to do: the loan is no longer owing"
+            done = "reopened as disbursed; the schedule matches the repayments"
 
         elif finding.code == SETTLED_NOT_MARKED_REPAID:
             loan.status = Loan.Status.REPAID

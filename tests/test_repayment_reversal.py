@@ -247,3 +247,88 @@ def test_the_command_audits_only_when_asked(loan, monkeypatch, settings):
     call_command("recheck_pending_payments", "--audit-confirmed")
     repayment.refresh_from_db()
     assert repayment.status == LoanRepayment.Status.REVERSED
+
+
+# ── A loan stuck on "Repaid" with money still owed ─────────────────────────
+# Seen in production: the card kept saying "Repaid" and the member could not
+# pay. Nothing could move it back — the admin form refuses any hand edit into
+# "disbursed", and loan health only knew the opposite defect.
+def _stuck(loan):
+    Loan.all_objects.filter(pk=loan.pk).update(status=Loan.Status.REPAID)
+    RepaymentInstalment.all_objects.filter(loan=loan).update(
+        status=RepaymentInstalment.Status.PAID)
+    loan.refresh_from_db()
+    return loan
+
+
+def test_loan_health_flags_a_repaid_loan_that_still_owes(loan):
+    from loans.health import REPAID_WITH_BALANCE, loan_health
+
+    _stuck(loan)
+
+    codes = {f.code for f in loan_health(loan.cooperative)["findings"]
+             if f.loan_id == loan.pk}
+
+    assert REPAID_WITH_BALANCE in codes
+
+
+def test_the_console_fix_reopens_it(loan):
+    from rest_framework.authtoken.models import Token
+    from rest_framework.test import APIClient
+
+    from accounts.models import Membership, Role, User
+
+    _stuck(loan)
+    with use_tenant(loan.cooperative):
+        user = User.objects.create_user(email="tr@x.co", full_name="Tr",
+                                        password="x")
+        Membership.objects.create(
+            user=user, member_no="TR-9",
+            role=Role.objects.filter(slug="treasurer").first())
+    token, _ = Token.objects.get_or_create(user=user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}",
+                       HTTP_X_COOPERATIVE_ID=str(loan.cooperative_id))
+
+    resp = client.post(f"/api/v1/loans/{loan.pk}/fix-health/",
+                       {"code": "repaid_with_balance"}, format="json")
+
+    assert resp.status_code == 200, resp.content
+    loan.refresh_from_db()
+    assert loan.status == Loan.Status.DISBURSED
+    assert loan.outstanding == Decimal("1050.00")
+    assert not RepaymentInstalment.all_objects.filter(
+        loan=loan, status=RepaymentInstalment.Status.PAID).exists(), (
+        "the schedule must match the (absent) repayments too")
+
+    again = client.post(f"/api/v1/loans/{loan.pk}/fix-health/",
+                        {"code": "repaid_with_balance"}, format="json")
+    assert again.status_code == 404, "nothing left to fix"
+
+
+def test_the_admin_action_reopens_it_and_spares_settled_loans(loan, coop,
+                                                               member):
+    from django.contrib.admin.sites import AdminSite
+
+    from loans.admin import LoanAdmin
+
+    _stuck(loan)
+    with use_tenant(coop):
+        settled = Loan.objects.create(
+            membership=member, product=loan.product,
+            principal=Decimal("1000"), interest_rate=Decimal("5"),
+            term_months=1)
+        approve_loan(settled, approve=True)
+        disburse_loan(settled)
+        record_repayment(settled, amount="1050")
+    settled.refresh_from_db()
+    assert settled.status == Loan.Status.REPAID
+
+    LoanAdmin(Loan, AdminSite()).reopen_owing(
+        _request(_operator()),
+        Loan.all_objects.filter(pk__in=[loan.pk, settled.pk]))
+
+    loan.refresh_from_db()
+    settled.refresh_from_db()
+    assert loan.status == Loan.Status.DISBURSED
+    assert settled.status == Loan.Status.REPAID

@@ -129,10 +129,35 @@ class LoanAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
                        "monthly_instalment", "created_at", "updated_at")
     inlines = (RepaymentInstalmentInline, LoanRepaymentInline)
     form = LoanAdminForm
-    actions = ("reverse_disbursement", "return_to_pending")
-    # Both post or depend on ledger entries, so they follow the same rule as
+    actions = ("reverse_disbursement", "return_to_pending", "reopen_owing")
+    # These post or depend on ledger entries, so they follow the same rule as
     # editing: 2FA first.
-    two_factor_actions = ("reverse_disbursement", "return_to_pending")
+    two_factor_actions = ("reverse_disbursement", "return_to_pending",
+                          "reopen_owing")
+
+    @admin.action(description="Reopen if marked repaid but still owing")
+    def reopen_owing(self, request, queryset):
+        """Return a loan marked repaid to disbursed when money is still owed.
+
+        The status form cannot do this — it refuses any hand edit into
+        "disbursed" — yet a loan stuck on "Repaid" with a balance blocks the
+        member from paying. Moves no money; loans that are genuinely settled
+        are left alone.
+        """
+        from loans.services import reopen_repaid_loan
+
+        reopened = [loan.pk for loan in queryset
+                    if reopen_repaid_loan(loan, actor=request.user)]
+        if reopened:
+            self.message_user(
+                request, f"Reopened loan(s) {', '.join(map(str, reopened))} as "
+                f"disbursed. The members can repay them again.",
+                messages.SUCCESS)
+        skipped = queryset.count() - len(reopened)
+        if skipped:
+            self.message_user(
+                request, f"Left {skipped} loan(s) alone: not marked repaid, or "
+                f"nothing is owed.", messages.INFO)
 
     @admin.action(description="Reverse disbursement (posts a ledger reversal)")
     def reverse_disbursement(self, request, queryset):

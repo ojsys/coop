@@ -215,6 +215,30 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
             "findings": [finding.as_dict() for finding in report["findings"]],
         })
 
+    @action(detail=True, methods=["post"], url_path="fix-health")
+    def fix_health(self, request, pk=None):
+        """Apply the safe correction for one finding on this loan.
+
+        Only findings marked ``auto_fixable`` — those that touch no money, such
+        as reopening a loan marked repaid while a balance is still owed. The
+        finding is re-derived here rather than trusted from the client, so a
+        stale page cannot apply a fix the loan no longer needs.
+        """
+        from loans.health import fix_finding, loan_health
+
+        loan = self.get_object()
+        code = request.data.get("code")
+        finding = next(
+            (f for f in loan_health(get_current_cooperative())["findings"]
+             if f.loan_id == loan.pk and f.code == code), None)
+        if finding is None:
+            return Response({"detail": "That problem is no longer present "
+                                       "on this loan."}, status=404)
+        if not finding.auto_fixable:
+            return Response({"detail": f"Not safe to correct automatically: "
+                                       f"{finding.fix}"}, status=400)
+        return Response({"result": fix_finding(finding, actor=request.user)})
+
     @action(detail=True, methods=["post"])
     def repay(self, request, pk=None):
         amount = request.data.get("amount")
