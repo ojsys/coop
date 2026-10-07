@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -116,7 +118,8 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         # Create the Paystack checkout and hand its URL back to the client. The
         # client sends the payer there; on return, `verify` confirms & posts.
         from django.conf import settings as dj_settings
-        from payments.providers import PaymentInitError
+        from payments.providers import (PAYER_PAYMENT_UNAVAILABLE,
+                                        PaymentInitError)
         from payments.services import initialize_payment
 
         authorization_url = None
@@ -127,9 +130,13 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
                 callback_url=request.data.get("callback_url"),
             )
         except PaymentInitError as exc:
-            # Surface the reason (e.g. bad key / subaccount) so the member isn't
-            # left guessing; the PENDING contribution stands and they can retry.
-            payment_error = str(exc)
+            # The member gets a message they can act on; the provider's reason
+            # (bad key, subaccount) goes to the log for the operator. The
+            # PENDING contribution stands and they can retry.
+            logging.getLogger("payments").warning(
+                "Contribution checkout failed (%s): %s",
+                contribution.psp_reference, exc)
+            payment_error = PAYER_PAYMENT_UNAVAILABLE
 
         payload = ContributionSerializer(contribution).data
         payload["authorization_url"] = authorization_url

@@ -8,6 +8,8 @@ Officer/console endpoints (``/loans/``, ``/savings-goals/`` …) stay separate.
 """
 from __future__ import annotations
 
+import logging
+
 from decimal import InvalidOperation
 
 from rest_framework import mixins, viewsets
@@ -132,7 +134,8 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
 
         from django.conf import settings as dj_settings
         from loans.services import LoanError, initiate_loan_repayment
-        from payments.providers import PaymentInitError
+        from payments.providers import (PAYER_PAYMENT_UNAVAILABLE,
+                                        PaymentInitError)
         from payments.services import initialize_loan_payment
 
         loan = self.get_object()
@@ -152,7 +155,13 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
                 repayment, email=loan.membership.user.email,
                 callback_url=request.data.get("callback_url"))
         except PaymentInitError as exc:
-            payment_error = str(exc)
+            logging.getLogger("payments").warning(
+                "Loan repayment checkout failed for loan %s (%s): %s",
+                loan.pk, reference, exc)
+            payment_error = PAYER_PAYMENT_UNAVAILABLE
+            # No checkout exists, so nothing can ever settle this placeholder;
+            # left behind, it would sit pending for officers to puzzle over.
+            repayment.delete()
 
         return Response({
             "reference": reference,

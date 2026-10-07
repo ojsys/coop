@@ -122,8 +122,21 @@ DEFAULT_CURRENCY = 'NGN'
 # environment in staging/production; never commit live keys.
 import os  # noqa: E402
 
-PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', 'sk_test_dev')
-PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '')
+
+
+def _key(name, default=''):
+    """A provider key from the environment, with stray wrapping removed.
+
+    A trailing space, a Windows line ending or quotes pasted around the value
+    (all easy to introduce through cPanel's environment editor or a hand-edited
+    .env) are sent verbatim in the Authorization header, and Paystack answers
+    401 Unauthorized — which looks exactly like a wrong key.
+    """
+    return os.environ.get(name, default).strip().strip('"').strip("'").strip()
+
+
+PAYSTACK_SECRET_KEY = _key('PAYSTACK_SECRET_KEY', 'sk_test_dev')
+PAYSTACK_PUBLIC_KEY = _key('PAYSTACK_PUBLIC_KEY')
 PAYSTACK_BASE_URL = os.environ.get('PAYSTACK_BASE_URL', 'https://api.paystack.co')
 # Where Paystack returns the payer after checkout (the webhook remains a backup
 # source of truth). Empty → Paystack uses the dashboard default.
@@ -351,6 +364,12 @@ LOGGING = {
         },
         # Every API error, including validation 400s.
         'api.errors': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        # Provider calls that failed — the detail a member is not shown.
+        'payments': {
             'handlers': ['console', 'file'],
             'level': 'WARNING',
             'propagate': False,

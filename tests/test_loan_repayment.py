@@ -207,3 +207,67 @@ def test_officer_sees_pending_claims_and_can_reject(coop, member, product):
         # The member is told it wasn't confirmed.
         assert Notification.all_objects.filter(
             membership=member, title__icontains="not confirmed").exists()
+
+
+# ── Paystack refusing the platform's key ────────────────────────────────────
+# Seen in production: the member tapped "Make a repayment" and was shown
+# "Paystack initialize failed: 401 Client Error: Unauthorized for url: ...".
+def _paystack_answers(monkeypatch, settings, status_code):
+    import requests
+
+    settings.PAYSTACK_SECRET_KEY = "sk_live_rejected"
+
+    class _Resp:
+        def __init__(self):
+            self.status_code = status_code
+
+        def raise_for_status(self):
+            if status_code >= 400:
+                raise requests.HTTPError(f"{status_code} Client Error",
+                                         response=self)
+
+        def json(self):
+            return {"status": False, "message": "Invalid key"}
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp())
+
+
+def test_a_refused_key_is_named_for_the_operator(monkeypatch, settings):
+    from payments.providers import PaymentInitError, PaystackProvider
+
+    _paystack_answers(monkeypatch, settings, 401)
+
+    with pytest.raises(PaymentInitError, match="secret key"):
+        PaystackProvider().initialize_transaction(
+            email="m@x.co", amount="1050", reference="LRPY-1")
+
+
+def test_the_member_sees_a_plain_message_and_no_orphan(coop, member, product,
+                                                       monkeypatch, settings):
+    _paystack_answers(monkeypatch, settings, 401)
+    loan = _disbursed_loan(coop, member, product, "1000", term=1)
+
+    resp = _client(member).post(
+        f"/api/v1/me/loans/{loan.id}/repay-initiate/",
+        {"amount": "1050"}, format="json")
+
+    assert resp.status_code == 201
+    error = resp.json()["payment_error"]
+    assert "isn't available" in error
+    assert "paystack.co" not in error and "401" not in error
+    with use_tenant(coop):
+        assert not LoanRepayment.all_objects.filter(
+            loan=loan, status=LoanRepayment.Status.PENDING).exists(), (
+            "no checkout exists, so nothing could ever settle a placeholder")
+
+
+@pytest.mark.parametrize("raw", [
+    "sk_live_abc ", "sk_live_abc\r", '"sk_live_abc"', " 'sk_live_abc' \n",
+])
+def test_stray_wrapping_is_removed_from_keys(monkeypatch, raw):
+    """Each of these is sent verbatim otherwise, and Paystack answers 401."""
+    from config.settings.base import _key
+
+    monkeypatch.setenv("PAYSTACK_SECRET_KEY", raw)
+
+    assert _key("PAYSTACK_SECRET_KEY") == "sk_live_abc"

@@ -38,6 +38,14 @@ class PaymentInitError(Exception):
     """Raised when a checkout could not be created with the provider."""
 
 
+# What a payer is told when a checkout cannot be created. The provider's own
+# words ("401 Client Error ... api.paystack.co") mean nothing to a member and
+# nothing they can act on; the detail is logged for the operator instead.
+PAYER_PAYMENT_UNAVAILABLE = (
+    "Online payment isn't available right now. Please try again later, or "
+    "pay by bank transfer and report it here.")
+
+
 class BaseProvider:
     name: str
 
@@ -197,6 +205,16 @@ class PaystackProvider(BaseProvider):
             )
             resp.raise_for_status()
             body = resp.json()
+        except requests.HTTPError as exc:
+            if getattr(exc.response, "status_code", None) == 401:
+                # Not the payer's doing and not transient: the platform's own
+                # secret key was refused, so every checkout fails until an
+                # operator replaces it.
+                raise PaymentInitError(
+                    "Paystack rejected the platform's secret key (401 "
+                    "Unauthorized). Check PAYSTACK_SECRET_KEY on the "
+                    "server.") from exc
+            raise PaymentInitError(f"Paystack initialize failed: {exc}") from exc
         except (requests.RequestException, ValueError) as exc:
             raise PaymentInitError(f"Paystack initialize failed: {exc}") from exc
 
