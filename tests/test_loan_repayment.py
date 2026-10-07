@@ -237,7 +237,7 @@ def test_a_refused_key_is_named_for_the_operator(monkeypatch, settings):
 
     _paystack_answers(monkeypatch, settings, 401)
 
-    with pytest.raises(PaymentInitError, match="secret key"):
+    with pytest.raises(PaymentInitError, match="401.*Invalid key"):
         PaystackProvider().initialize_transaction(
             email="m@x.co", amount="1050", reference="LRPY-1")
 

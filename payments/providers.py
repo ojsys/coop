@@ -46,6 +46,14 @@ PAYER_PAYMENT_UNAVAILABLE = (
     "pay by bank transfer and report it here.")
 
 
+def _paystack_message(response) -> str:
+    """Paystack's own reason from an error response, or ``""``."""
+    try:
+        return str(response.json().get("message") or "")[:200]
+    except Exception:  # noqa: BLE001 — a reason is a nicety, never required
+        return ""
+
+
 class BaseProvider:
     name: str
 
@@ -206,15 +214,18 @@ class PaystackProvider(BaseProvider):
             resp.raise_for_status()
             body = resp.json()
         except requests.HTTPError as exc:
+            # Paystack explains every refusal in the body ("Invalid key", a
+            # reference or amount problem, ...). Without it a 401 reads as
+            # "wrong key" even when the key works for every other call.
+            said = _paystack_message(exc.response)
             if getattr(exc.response, "status_code", None) == 401:
-                # Not the payer's doing and not transient: the platform's own
-                # secret key was refused, so every checkout fails until an
-                # operator replaces it.
                 raise PaymentInitError(
-                    "Paystack rejected the platform's secret key (401 "
-                    "Unauthorized). Check PAYSTACK_SECRET_KEY on the "
-                    "server.") from exc
-            raise PaymentInitError(f"Paystack initialize failed: {exc}") from exc
+                    f"Paystack refused the checkout (401 Unauthorized): "
+                    f"{said or 'no reason given'}. Usually the secret key, "
+                    f"but compare with a call that works.") from exc
+            raise PaymentInitError(
+                f"Paystack initialize failed: {exc}"
+                + (f" — {said}" if said else "")) from exc
         except (requests.RequestException, ValueError) as exc:
             raise PaymentInitError(f"Paystack initialize failed: {exc}") from exc
 
