@@ -796,6 +796,12 @@ def check_loan_payment(repayment):
 
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         return repayment
+    if repayment.status == LoanRepayment.Status.REVERSED:
+        # Reversed because Paystack had no payment. Should one turn up after
+        # all, re-posting it silently could double-count; an operator decides.
+        raise PaymentNotReceived(
+            "This repayment was reversed. If Paystack now shows it as paid, "
+            "an officer should record it again.", provider_status="reversed")
     if repayment.channel != LoanRepayment.Channel.PSP:
         # A member-reported bank transfer went to the society's own bank, which
         # Paystack never sees. An officer verifies that against the statement.
@@ -824,6 +830,49 @@ def check_loan_payment(repayment):
             f"the Paystack dashboard.", provider_status="partial")
 
     return confirm_loan_repayment(repayment)
+
+
+def recheck_settled_repayment(repayment, *, actor=None):
+    """Ask Paystack whether a *confirmed* online repayment was really paid.
+
+    The other half of :func:`check_loan_payment`. That one stops an unpaid
+    repayment being posted; this one finds those that were posted anyway —
+    before that gate existed, an officer's Confirm posted any pending row — and
+    reverses them, which returns the loan to the member to repay.
+
+    Returns ``(repayment, outcome)``:
+
+    * ``"kept"``     — Paystack received the full amount; nothing changes.
+    * ``"reversed"`` — Paystack has no successful payment for it; reversed.
+    * ``"short"``    — Paystack received *some* money, less than was posted.
+      Not reversed automatically: real money arrived, and wiping the whole
+      repayment would hide it. Left for an operator.
+
+    Raises ``PaymentInitError`` when Paystack cannot be asked. That must never
+    read as "no record" — an outage would otherwise reverse genuine payments.
+    """
+    from loans.models import LoanRepayment
+    from loans.services import reverse_repayment
+
+    if (repayment.status != LoanRepayment.Status.CONFIRMED
+            or repayment.channel != LoanRepayment.Channel.PSP
+            or not repayment.psp_reference):
+        return repayment, "kept"
+
+    detail = get_provider(Provider.PAYSTACK).fetch_transaction(
+        repayment.psp_reference)
+    if detail is None:
+        reason = "Paystack has no record of this payment."
+    elif not detail.get("success"):
+        reason = (f"Paystack reports the payment as "
+                  f"{detail.get('status') or 'not successful'}.")
+    else:
+        paid = detail.get("amount")
+        if paid is not None and paid < repayment.amount:
+            return repayment, "short"
+        return repayment, "kept"
+
+    return reverse_repayment(repayment, reason=reason, actor=actor), "reversed"
 
 
 def verify_loan_payment(cooperative, reference):
@@ -1111,6 +1160,10 @@ def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         payment.status = PaymentEvent.Status.DUPLICATE
         payment.note = "Loan repayment already settled."
+    elif repayment.status == LoanRepayment.Status.REVERSED:
+        payment.status = PaymentEvent.Status.UNMATCHED
+        payment.note = ("Payment arrived for a loan repayment that had been "
+                        "reversed; record it again if it is genuine.")
     elif payment.amount != repayment.amount:
         payment.status = PaymentEvent.Status.PARTIAL
         payment.note = (

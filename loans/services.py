@@ -585,7 +585,16 @@ def _post_repayment(loan, amount, *, actor, channel, psp_reference, status,
         lines.append(Line(account=interest_income, credit=interest_part,
                           description=f"Loan {loan.id} interest"))
 
+    # Numbered from the journals already posted, not by counting repayment
+    # rows: confirming an online payment deletes its pending placeholder, so a
+    # row count can fall back onto a number already used — and the next
+    # repayment on that loan failed on the ledger's unique reference.
+    from ledger.models import Journal
+
     seq = LoanRepayment.all_objects.filter(loan=loan).count() + 1
+    while Journal.all_objects.filter(
+            cooperative=coop, reference=f"LOAN-{loan.id}-RPY-{seq}").exists():
+        seq += 1
     journal = post_journal(
         cooperative=coop, reference=f"LOAN-{loan.id}-RPY-{seq}", lines=lines,
         memo=f"Loan {loan.id} repayment", created_by=actor)
@@ -681,6 +690,81 @@ def confirm_loan_repayment(repayment, *, actor=None):
     # Replace the pending placeholder with the settled record.
     repayment.delete()
     return settled
+
+
+@transaction.atomic
+def reverse_repayment(repayment, *, reason, actor=None):
+    """Undo a repayment that was posted in error, everywhere it took effect.
+
+    For a repayment confirmed although no money arrived — the case that made a
+    member's loan read "Repaid" with nothing paid. Four things were changed when
+    it was posted, so four are put back:
+
+    * **Ledger** — a mirror journal is posted; the original is never touched.
+    * **Balance** — the repayment becomes REVERSED, and ``repaid_amount`` counts
+      only confirmed ones, so the outstanding balance returns.
+    * **Schedule** — instalments are re-allocated from scratch with the
+      repayments that remain. Allocation is always oldest-instalment-first, so
+      replaying it gives exactly the state those repayments alone produce.
+    * **Status** — a loan marked REPAID goes back to DISBURSED, which is what
+      lets the member repay it again.
+
+    The member is told, since they were told it was received.
+    """
+    from django.utils import timezone
+
+    from audit.services import record_action
+    from communications.models import Notification
+    from communications.services import notify_member
+    from ledger.services import reverse_journal
+    from loans.models import Loan, LoanRepayment, RepaymentInstalment
+
+    repayment = LoanRepayment.all_objects.select_for_update().get(
+        pk=repayment.pk)
+    if repayment.status != LoanRepayment.Status.CONFIRMED:
+        raise LoanError("Only a confirmed repayment can be reversed.")
+
+    loan = Loan.all_objects.select_for_update().get(pk=repayment.loan_id)
+    if repayment.journal_id and not repayment.journal.is_reversed:
+        repayment.reversal_journal = reverse_journal(
+            repayment.journal, created_by=actor,
+            memo=f"Loan {loan.id} repayment reversed: {reason}"[:255])
+    repayment.status = LoanRepayment.Status.REVERSED
+    repayment.reversal_reason = reason[:255]
+    repayment.reversed_at = timezone.now()
+    repayment.save(update_fields=["status", "reversal_journal",
+                                  "reversal_reason", "reversed_at",
+                                  "updated_at"])
+
+    RepaymentInstalment.all_objects.filter(loan=loan).update(
+        amount_paid=ZERO, status=RepaymentInstalment.Status.PENDING)
+    remaining = (LoanRepayment.all_objects
+                 .filter(loan=loan, status=LoanRepayment.Status.CONFIRMED)
+                 .order_by("created_at", "id"))
+    for kept in remaining:
+        _allocate(loan, kept.amount)
+
+    before = loan.status
+    if loan.status == Loan.Status.REPAID and loan.outstanding > ZERO:
+        loan.status = Loan.Status.DISBURSED
+        loan.save(update_fields=["status", "updated_at"])
+
+    notify_member(
+        loan.membership, kind=Notification.Kind.LOAN,
+        title="Repayment reversed",
+        body=(f"The {_money(repayment.amount)} repayment recorded on your "
+              f"{loan.product.name} has been reversed: {reason} Outstanding "
+              f"balance: {_money(loan.outstanding)}. You can make the "
+              f"repayment again from your loan page."))
+    record_action(
+        cooperative=loan.cooperative, actor=actor,
+        actor_label="" if actor else "System",
+        action="loan.repayment_reversed", entity=repayment,
+        before={"loan_status": before},
+        after={"loan_status": loan.status, "amount": str(repayment.amount),
+               "reference": repayment.psp_reference, "reason": reason},
+    )
+    return repayment
 
 
 @transaction.atomic

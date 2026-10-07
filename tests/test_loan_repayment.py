@@ -384,3 +384,17 @@ def test_clearing_an_abandoned_checkout_does_not_message_the_member(
 
     assert after == before
     assert not LoanRepayment.all_objects.filter(pk=repayment.pk).exists()
+
+
+def test_a_repayment_after_an_online_one_posts(coop, member, product):
+    """Confirming an online payment deletes its placeholder row, which used to
+    make the next repayment reuse a journal reference and fail."""
+    from loans.services import confirm_loan_repayment, initiate_loan_repayment
+
+    loan = _disbursed_loan(coop, member, product, "100000", term=4)
+    with use_tenant(coop):
+        confirm_loan_repayment(initiate_loan_repayment(
+            loan, amount="27500", reference="LRPY-ONLINE-1"))
+        record_repayment(loan, amount="27500")
+        assert LoanRepayment.all_objects.filter(
+            loan=loan, status=LoanRepayment.Status.CONFIRMED).count() == 2

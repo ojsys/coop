@@ -295,26 +295,35 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     ordering = ("-created_at",)
     autocomplete_fields = ("cooperative", "loan")
     list_select_related = ("loan", "cooperative")
-    # The journal is written by the repayment service.
-    readonly_fields = ("journal", "created_at", "updated_at")
+    # The journal is written by the repayment service, and status follows the
+    # ledger: typing "reversed" here would leave the money posted.
+    readonly_fields = ("journal", "status", "reversal_journal",
+                       "reversal_reason", "reversed_at", "created_at",
+                       "updated_at")
 
-    actions = ("recheck_selected",)
-    # Settling a repayment posts to the ledger.
-    two_factor_actions = ("recheck_selected",)
+    actions = ("recheck_selected", "reverse_selected")
+    # Both post to the ledger.
+    two_factor_actions = ("recheck_selected", "reverse_selected")
 
     @admin.action(description="Recheck online payment with the provider")
     def recheck_selected(self, request, queryset):
-        """Settle pending online repayments the provider reports as paid.
+        """Make each online repayment agree with what Paystack received.
 
-        For the member who paid and closed the tab before returning: the money
-        was taken but the repayment stayed pending. Goes through
-        ``verify_loan_payment``, the same path as the member's own return, so
-        the two cannot disagree. Bank-transfer claims are skipped — they are
-        checked against the society's account, not the provider.
+        Works in both directions:
+
+        * **Pending** — the member paid and closed the tab before returning, so
+          the money was taken but nothing posted. Settled if Paystack has it.
+        * **Confirmed** — posted although Paystack never received the money
+          (an officer's Confirm used to post any pending row). Reversed, which
+          puts the loan back to the member to repay.
+
+        Bank-transfer claims and cash are skipped: Paystack never sees them.
+        Use "Reverse repayment" for those.
         """
         from payments.providers import PaymentInitError
         from payments.services import (PaymentNotReceived,
                                        provider_is_simulated,
+                                       recheck_settled_repayment,
                                        verify_loan_payment)
 
         if provider_is_simulated() and not settings.DEBUG:
@@ -325,15 +334,41 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
                 messages.ERROR)
             return
 
-        settled = waiting = skipped = 0
-        for repayment in queryset.select_related("cooperative"):
-            if (repayment.status != LoanRepayment.Status.PENDING
-                    or repayment.channel != LoanRepayment.Channel.PSP
-                    or not repayment.psp_reference):
+        settled = waiting = skipped = kept = 0
+        for repayment in queryset.select_related("cooperative", "loan"):
+            reference = repayment.psp_reference
+            if (repayment.channel != LoanRepayment.Channel.PSP
+                    or not reference
+                    or repayment.status == LoanRepayment.Status.REVERSED):
                 skipped += 1
                 continue
 
-            reference = repayment.psp_reference
+            if repayment.status == LoanRepayment.Status.CONFIRMED:
+                try:
+                    _, outcome = recheck_settled_repayment(
+                        repayment, actor=request.user)
+                except PaymentInitError as exc:
+                    self.message_user(
+                        request, f"{reference}: could not reach the provider "
+                        f"— {exc}", messages.ERROR)
+                    continue
+                if outcome == "reversed":
+                    repayment.refresh_from_db()
+                    self.message_user(
+                        request, f"{reference}: confirmed → reversed. "
+                        f"{repayment.reversal_reason} Loan "
+                        f"#{repayment.loan_id} is open for repayment again.",
+                        messages.WARNING)
+                elif outcome == "short":
+                    self.message_user(
+                        request, f"{reference}: Paystack received less than "
+                        f"the {repayment.amount:,.2f} posted. Not reversed "
+                        f"automatically — check it in the Paystack dashboard.",
+                        messages.WARNING)
+                else:
+                    kept += 1
+                continue
+
             try:
                 result = verify_loan_payment(repayment.cooperative, reference)
             except PaymentNotReceived as exc:
@@ -363,11 +398,42 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
             else:
                 waiting += 1
 
+        if kept:
+            self.message_user(
+                request, f"{kept} confirmed repayment(s) match a successful "
+                f"Paystack payment — left as they are.", messages.INFO)
         if waiting:
             self.message_user(
                 request, f"{waiting} repayment(s) are not paid at the provider "
                 f"yet, so they stay pending.", messages.INFO)
         if skipped:
             self.message_user(
-                request, f"Skipped {skipped} repayment(s) that are already "
-                f"confirmed or are not online payments.", messages.INFO)
+                request, f"Skipped {skipped} repayment(s) that are not online "
+                f"payments or are already reversed.", messages.INFO)
+
+    @admin.action(description="Reverse repayment (posts a ledger reversal)")
+    def reverse_selected(self, request, queryset):
+        """Reverse a repayment posted in error, whatever its channel.
+
+        For what Paystack cannot judge — a cash entry or a reported transfer
+        that never reached the bank. Online repayments are better rechecked,
+        which reverses them only if Paystack agrees nothing arrived.
+        """
+        from loans.services import LoanError, reverse_repayment
+
+        done = 0
+        for repayment in queryset.select_related("loan"):
+            try:
+                reverse_repayment(
+                    repayment, actor=request.user,
+                    reason="Reversed by an operator: no payment was received.")
+            except LoanError as exc:
+                self.message_user(request, f"Repayment {repayment.pk}: {exc}",
+                                  messages.WARNING)
+                continue
+            done += 1
+        if done:
+            self.message_user(
+                request, f"Reversed {done} repayment(s). Each loan's balance "
+                f"and schedule are restored, and a repaid loan is open for "
+                f"repayment again.", messages.SUCCESS)

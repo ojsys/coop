@@ -233,6 +233,10 @@ class LoanRepayment(TenantScopedModel, TimeStampedModel):
     class Status(models.TextChoices):
         PENDING = "pending", "Pending"      # PSP initiated, not yet verified
         CONFIRMED = "confirmed", "Confirmed"
+        # Posted in error — e.g. confirmed although the provider never received
+        # the money. Kept, not deleted: its journal stays in the ledger beside
+        # the reversal that cancels it, and it no longer counts as repaid.
+        REVERSED = "reversed", "Reversed"
 
     loan = models.ForeignKey(
         Loan, on_delete=models.CASCADE, related_name="repayments")
@@ -248,6 +252,11 @@ class LoanRepayment(TenantScopedModel, TimeStampedModel):
     journal = models.ForeignKey(
         "ledger.Journal", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="loan_repayments")
+    reversal_journal = models.ForeignKey(
+        "ledger.Journal", on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="reversed_loan_repayments")
+    reversal_reason = models.CharField(max_length=255, blank=True)
+    reversed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

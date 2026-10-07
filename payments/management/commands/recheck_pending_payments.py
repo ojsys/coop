@@ -13,6 +13,13 @@ them through the same services the admin actions, the webhook and the apps use.
 Safe to repeat and to schedule: a settled record is never touched again, and one
 that is still unpaid simply stays pending. Member-reported bank transfers are
 left alone — they are checked against the society's account, not the provider.
+
+``--audit-confirmed`` also goes the other way: it asks Paystack about every
+*confirmed* online loan repayment and reverses those Paystack has no successful
+payment for, returning the loan to the member to repay. Run it with --dry-run
+first. If the Paystack key now belongs to a different account from the one that
+took the payments, every genuine repayment would read as "no record", so check
+that the dry run only names the repayments you expect.
 """
 from __future__ import annotations
 
@@ -23,7 +30,8 @@ from payments.models import Provider, WalletTopUp
 from payments.providers import PaymentInitError, get_provider
 from payments import services
 from payments.services import (PaymentNotReceived, WalletError,
-                               recheck_wallet_topup, verify_loan_payment)
+                               recheck_settled_repayment, recheck_wallet_topup,
+                               verify_loan_payment)
 
 
 class Command(BaseCommand):
@@ -40,6 +48,11 @@ class Command(BaseCommand):
             help="Run even without a live provider key (dev only: every "
                  "pending payment will be treated as paid).",
         )
+        parser.add_argument(
+            "--audit-confirmed", action="store_true",
+            help="Also check confirmed online loan repayments and reverse any "
+                 "Paystack has no successful payment for.",
+        )
 
     def handle(self, *args, **options):
         # Looked up at call time, not bound at import, so the guard can never
@@ -54,6 +67,8 @@ class Command(BaseCommand):
         self.dry_run = options["dry_run"]
         self._topups()
         self._repayments()
+        if options["audit_confirmed"]:
+            self._audit_confirmed()
         if self.dry_run:
             self.stdout.write(self.style.NOTICE("Dry run — nothing written."))
 
@@ -144,3 +159,47 @@ class Command(BaseCommand):
             self.stdout.write(
                 f"  {settled} confirmed, {unapplied} paid after payoff, "
                 f"{waiting} still pending, {errors} could not be checked.")
+
+    def _audit_confirmed(self):
+        confirmed = (LoanRepayment.all_objects
+                     .filter(status=LoanRepayment.Status.CONFIRMED,
+                             channel=LoanRepayment.Channel.PSP)
+                     .exclude(psp_reference="")
+                     .select_related("cooperative").order_by("created_at"))
+        self.stdout.write(
+            f"Confirmed online loan repayments to audit: {len(confirmed)}")
+
+        kept = reversed_ = short = errors = 0
+        for repayment in confirmed:
+            reference = repayment.psp_reference
+            label = (f"{reference}  {repayment.cooperative}  loan "
+                     f"#{repayment.loan_id}  {repayment.amount:,.2f}")
+            try:
+                if self.dry_run:
+                    status = self._ask(Provider.PAYSTACK, reference)
+                    verdict = ("keep" if status == "success"
+                               else "WOULD REVERSE")
+                    self.stdout.write(
+                        f"  {label}  provider says: {status}  → {verdict}")
+                    continue
+                repayment, outcome = recheck_settled_repayment(repayment)
+            except PaymentInitError as exc:
+                errors += 1
+                self.stdout.write(self.style.ERROR(f"  {label}  {exc}"))
+                continue
+
+            if outcome == "reversed":
+                reversed_ += 1
+                self.stdout.write(self.style.WARNING(
+                    f"  {label}  reversed — {repayment.reversal_reason}"))
+            elif outcome == "short":
+                short += 1
+                self.stdout.write(self.style.WARNING(
+                    f"  {label}  Paystack received less — check by hand"))
+            else:
+                kept += 1
+
+        if not self.dry_run and confirmed:
+            self.stdout.write(
+                f"  {kept} verified, {reversed_} reversed, {short} short, "
+                f"{errors} could not be checked.")
