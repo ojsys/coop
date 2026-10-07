@@ -23,7 +23,7 @@ from contributions.models import Contribution
 from contributions.services import confirm_contribution
 from payments.models import PaymentEvent, Provider, ProviderAccount
 from payments.providers import (
-    NormalizedEvent, WebhookVerificationError, get_provider,
+    NormalizedEvent, PaymentInitError, WebhookVerificationError, get_provider,
 )
 
 
@@ -761,29 +761,88 @@ def initialize_loan_payment(repayment, *, email, callback_url=None):
     )
 
 
-def verify_loan_payment(cooperative, reference):
-    """Verify a Paystack loan repayment and, on success, settle the matching
-    PENDING repayment — posting it to the ledger immediately. Idempotent.
+class PaymentNotReceived(PaymentInitError):
+    """The provider has not received (all of) a payment, so nothing is posted.
 
-    Returns the settled :class:`LoanRepayment` (or the pending one unchanged if
-    the charge did not succeed, or ``None`` if there is nothing to settle)."""
+    Subclasses ``PaymentInitError`` so every caller that already reports a
+    provider problem to the user reports this one too, rather than treating a
+    quiet return as success.
+    """
+
+    def __init__(self, message, *, provider_status=""):
+        super().__init__(message)
+        self.provider_status = provider_status
+
+
+def check_loan_payment(repayment):
+    """Ask Paystack about one online repayment; settle it only if fully paid.
+
+    The single gate every path goes through — the member's return from
+    checkout, an officer's "Check with Paystack", the admin recheck and the
+    bulk command — so none of them can post a repayment the provider has not
+    actually received. Two conditions, both checked:
+
+    * Paystack reports the charge as ``success``. A cancelled or abandoned
+      checkout still redirects back to the app, so arriving back proves
+      nothing.
+    * The amount Paystack received covers the repayment. A charge for less
+      would otherwise clear more of the loan than was paid.
+
+    Returns the settled repayment (or ``None`` if the loan had already been
+    repaid in full). Raises :class:`PaymentNotReceived` otherwise.
+    """
     from loans.models import LoanRepayment
     from loans.services import confirm_loan_repayment
 
-    repayment = (
-        LoanRepayment.all_objects
-        .filter(cooperative=cooperative, psp_reference=reference)
-        .first()
-    )
-    if repayment is None:
-        return None
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         return repayment
+    if repayment.channel != LoanRepayment.Channel.PSP:
+        # A member-reported bank transfer went to the society's own bank, which
+        # Paystack never sees. An officer verifies that against the statement.
+        raise PaymentNotReceived(
+            "This is a reported bank transfer, not an online payment, so "
+            "Paystack cannot confirm it.")
 
-    provider = get_provider(Provider.PAYSTACK)
-    if provider.verify_transaction(reference):
-        return confirm_loan_repayment(repayment)
-    return repayment
+    detail = get_provider(Provider.PAYSTACK).fetch_transaction(
+        repayment.psp_reference)
+    if detail is None:
+        raise PaymentNotReceived(
+            "Paystack has no payment with this reference. Nothing was posted.",
+            provider_status="unknown")
+    status = detail.get("status") or ("success" if detail.get("success")
+                                      else "unknown")
+    if not detail.get("success"):
+        raise PaymentNotReceived(
+            f"Paystack has not received this payment (status: {status}). "
+            f"Nothing was posted.", provider_status=status)
+
+    paid = detail.get("amount")
+    if paid is not None and paid < repayment.amount:
+        raise PaymentNotReceived(
+            f"Paystack received {paid:,.2f}, less than the {repayment.amount:,.2f} "
+            f"this repayment is for. Nothing was posted; check the payment in "
+            f"the Paystack dashboard.", provider_status="partial")
+
+    return confirm_loan_repayment(repayment)
+
+
+def verify_loan_payment(cooperative, reference):
+    """Settle the online repayment with this reference if Paystack was paid.
+
+    Idempotent: an already-settled repayment is returned unchanged. Returns
+    ``None`` when the reference matches no repayment of this cooperative.
+    Raises :class:`PaymentNotReceived` when Paystack has not received the
+    payment in full — callers must surface that, not report success.
+    """
+    from loans.models import LoanRepayment
+
+    matches = LoanRepayment.all_objects.filter(
+        cooperative=cooperative, psp_reference=reference)
+    repayment = (matches.filter(status=LoanRepayment.Status.CONFIRMED).first()
+                 or matches.first())
+    if repayment is None:
+        return None
+    return check_loan_payment(repayment)
 
 
 def verify_payment(cooperative, reference):

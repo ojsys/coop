@@ -717,6 +717,11 @@ def reject_repayment(repayment, *, actor=None):
 
     if repayment.status != LoanRepayment.Status.PENDING:
         raise LoanError("Only a pending repayment claim can be dismissed.")
+    if repayment.channel == LoanRepayment.Channel.PSP:
+        # An online checkout the member never completed: nothing was reported,
+        # so there is nothing to tell them. Clearing it only tidies the queue.
+        repayment.delete()
+        return
     loan = repayment.loan
     amount = repayment.amount
     notify_member(

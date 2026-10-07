@@ -271,3 +271,116 @@ def test_stray_wrapping_is_removed_from_keys(monkeypatch, raw):
     monkeypatch.setenv("PAYSTACK_SECRET_KEY", raw)
 
     assert _key("PAYSTACK_SECRET_KEY") == "sk_live_abc"
+
+
+# ── Only money Paystack actually received is posted ────────────────────────
+# Seen in testing: an officer pressed Confirm on an online repayment the member
+# never paid, and the loan showed as repaid.
+def _paystack_reports(monkeypatch, status, amount=None):
+    from payments import services
+
+    class _Stub:
+        def fetch_transaction(self, reference):
+            return {"success": status == "success", "status": status,
+                    "amount": Decimal(amount) if amount else None,
+                    "fee": Decimal("0")}
+
+    monkeypatch.setattr(services, "get_provider", lambda n: _Stub())
+
+
+def _privileged(coop):
+    with use_tenant(coop):
+        u = User.objects.create_user(email="treasurer@x.co",
+                                     full_name="Treasurer", password="x")
+        return Membership.objects.create(
+            user=u, member_no="TR-1",
+            role=Role.objects.filter(slug="treasurer").first())
+
+
+def _online_attempt(coop, member, product, amount="27500"):
+    from loans.services import initiate_loan_repayment
+
+    loan = _disbursed_loan(coop, member, product, "100000", term=4)
+    with use_tenant(coop):
+        repayment = initiate_loan_repayment(loan, amount=amount,
+                                            reference="LRPY-ATTEMPT")
+    return loan, repayment
+
+
+def _officer_confirms(coop, repayment):
+    token, _ = Token.objects.get_or_create(user=_privileged(coop).user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}",
+                       HTTP_X_COOPERATIVE_ID=str(coop.id))
+    return client.post(f"/api/v1/loan-repayments/{repayment.id}/confirm/")
+
+
+def _confirmed(loan):
+    return LoanRepayment.all_objects.filter(
+        loan=loan, status=LoanRepayment.Status.CONFIRMED).count()
+
+
+@pytest.mark.parametrize("status", ["abandoned", "failed"])
+def test_confirm_refuses_an_online_payment_paystack_did_not_receive(
+        coop, member, product, monkeypatch, status):
+    _paystack_reports(monkeypatch, status)
+    loan, repayment = _online_attempt(coop, member, product)
+
+    resp = _officer_confirms(coop, repayment)
+
+    assert resp.status_code == 400, resp.content
+    assert resp.json()["payment_status"] == status
+    assert _confirmed(loan) == 0
+    loan.refresh_from_db()
+    assert loan.outstanding == Decimal("110000.00")
+
+
+def test_confirm_refuses_a_short_payment(coop, member, product, monkeypatch):
+    _paystack_reports(monkeypatch, "success", amount="1000")
+    loan, repayment = _online_attempt(coop, member, product)
+
+    resp = _officer_confirms(coop, repayment)
+
+    assert resp.status_code == 400
+    assert "less than" in resp.json()["detail"]
+    assert _confirmed(loan) == 0
+
+
+def test_confirm_posts_an_online_payment_paystack_received(
+        coop, member, product, monkeypatch):
+    _paystack_reports(monkeypatch, "success", amount="27500")
+    loan, repayment = _online_attempt(coop, member, product)
+
+    resp = _officer_confirms(coop, repayment)
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["verified_by"] == "paystack"
+    assert _confirmed(loan) == 1
+
+
+def test_the_member_is_not_told_unpaid_money_was_received(
+        coop, member, product, monkeypatch):
+    """A cancelled checkout still returns to the app; that is not a payment."""
+    _paystack_reports(monkeypatch, "abandoned")
+    loan, _ = _online_attempt(coop, member, product)
+
+    resp = _client(member).post(f"/api/v1/me/loans/{loan.id}/repay-verify/",
+                                {"reference": "LRPY-ATTEMPT"}, format="json")
+
+    assert resp.status_code == 400
+    assert resp.json()["payment_status"] == "abandoned"
+    assert _confirmed(loan) == 0
+
+
+def test_clearing_an_abandoned_checkout_does_not_message_the_member(
+        coop, member, product):
+    from loans.services import reject_repayment
+
+    loan, repayment = _online_attempt(coop, member, product)
+    with use_tenant(coop):
+        before = Notification.all_objects.filter(membership=member).count()
+        reject_repayment(repayment)
+        after = Notification.all_objects.filter(membership=member).count()
+
+    assert after == before
+    assert not LoanRepayment.all_objects.filter(pk=repayment.pk).exists()

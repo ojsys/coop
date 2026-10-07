@@ -197,19 +197,35 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
     def repay_verify(self, request, pk=None):
         """Confirm an online repayment after Paystack checkout — settles it to
         the ledger immediately. Idempotent and safe alongside the webhook."""
+        from loans.models import LoanRepayment
         from payments.providers import PaymentInitError
-        from payments.services import verify_loan_payment
+        from payments.services import PaymentNotReceived, verify_loan_payment
 
         loan = self.get_object()
         reference = request.data.get("reference")
         if not reference:
             raise ValidationError("A payment reference is required.")
+        if not LoanRepayment.all_objects.filter(
+                loan=loan, psp_reference=reference).exists():
+            return Response(
+                {"detail": "No repayment on this loan has that reference.",
+                 "payment_status": "unknown"}, status=404)
+        # An error, not a quiet 200, when nothing was received: returning to the
+        # app happens on cancel too, and every client (including installed
+        # builds that predate payment_status) treats a 200 as "paid".
         try:
             verify_loan_payment(loan.cooperative, reference)
+        except PaymentNotReceived as exc:
+            return Response({"detail": str(exc),
+                             "payment_status": exc.provider_status or "pending"},
+                            status=400)
         except PaymentInitError as exc:
-            raise ValidationError(str(exc))
+            return Response({"detail": str(exc), "payment_status": "unknown"},
+                            status=502)
         loan.refresh_from_db()
-        return Response(LoanSerializer(loan, context={"request": request}).data)
+        data = LoanSerializer(loan, context={"request": request}).data
+        data["payment_status"] = "confirmed"
+        return Response(data)
 
 
 class MemberSavingsGoalViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):

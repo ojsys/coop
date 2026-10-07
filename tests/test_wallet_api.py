@@ -242,3 +242,30 @@ def test_one_society_cannot_confirm_anothers_topup(coop, other_coop,
     assert resp.status_code == 404
     assert WalletTopUp.all_objects.get(
         psp_reference=reference).status == WalletTopUp.Status.PENDING
+
+
+# ── Funding history vs. attempts ────────────────────────────────────────────
+def test_unpaid_attempts_are_kept_apart_from_real_funding(coop, monkeypatch):
+    """Every click on "Fund wallet" creates a row before any money moves; the
+    funding history must show only what actually arrived."""
+    _stub(monkeypatch)
+    client = _client(_officer(coop))
+
+    paid = client.post("/api/v1/wallet/topup/", {"amount": "50000"},
+                       format="json", **_h(coop)).json()["topup"]
+    client.post("/api/v1/wallet/verify/", {"reference": paid["psp_reference"]},
+                format="json", **_h(coop))
+    for _ in range(3):
+        client.post("/api/v1/wallet/topup/", {"amount": "50000"},
+                    format="json", **_h(coop))
+    with use_tenant(coop):
+        WalletTopUp.objects.create(amount=Decimal("10"), psp_reference="WLT-F",
+                                   status=WalletTopUp.Status.FAILED)
+
+    body = client.get("/api/v1/wallet/", **_h(coop)).json()
+
+    assert [t["psp_reference"] for t in body["topups"]] == [
+        paid["psp_reference"]]
+    assert all(t["status"] != "confirmed" for t in body["attempts"])
+    assert len(body["attempts"]) == 4
+    assert body["attempt_counts"] == {"pending": 3, "failed": 1}

@@ -251,13 +251,30 @@ class WalletViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         return WalletTopUp.objects.select_related("initiated_by", "journal")
 
     def list(self, request, *args, **kwargs):
-        """Balance plus the recent top-ups behind it."""
+        """Balance, the funding that actually arrived, and the other attempts.
+
+        Clicking "Fund wallet" creates a record before any money moves, so most
+        rows are checkouts that were never paid. Mixed together, those buried
+        the real funding history — and twenty abandoned clicks could push every
+        successful top-up off the list. ``topups`` is therefore confirmed
+        funding only; ``attempts`` holds the pending and failed ones, kept for
+        anyone reconciling.
+        """
         cooperative = get_current_cooperative()
-        recent = self.get_queryset()[:20]
+        qs = self.get_queryset()
+        confirmed = qs.filter(status=WalletTopUp.Status.CONFIRMED)
+        others = qs.exclude(status=WalletTopUp.Status.CONFIRMED)
         return Response({
             "balance": str(wallet_balance(cooperative)),
             "currency": cooperative.base_currency,
-            "topups": WalletTopUpSerializer(recent, many=True).data,
+            "topups": WalletTopUpSerializer(confirmed[:50], many=True).data,
+            "attempts": WalletTopUpSerializer(others[:50], many=True).data,
+            "attempt_counts": {
+                "pending": others.filter(
+                    status=WalletTopUp.Status.PENDING).count(),
+                "failed": others.filter(
+                    status=WalletTopUp.Status.FAILED).count(),
+            },
         })
 
     @action(detail=False, methods=["post"])

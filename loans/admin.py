@@ -313,7 +313,9 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
         checked against the society's account, not the provider.
         """
         from payments.providers import PaymentInitError
-        from payments.services import provider_is_simulated, verify_loan_payment
+        from payments.services import (PaymentNotReceived,
+                                       provider_is_simulated,
+                                       verify_loan_payment)
 
         if provider_is_simulated() and not settings.DEBUG:
             self.message_user(
@@ -334,6 +336,12 @@ class LoanRepaymentAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
             reference = repayment.psp_reference
             try:
                 result = verify_loan_payment(repayment.cooperative, reference)
+            except PaymentNotReceived as exc:
+                waiting += 1
+                if exc.provider_status == "partial":
+                    self.message_user(request, f"{reference}: {exc}",
+                                      messages.WARNING)
+                continue
             except PaymentInitError as exc:
                 self.message_user(
                     request, f"{reference}: could not reach the provider — "

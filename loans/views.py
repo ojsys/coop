@@ -248,13 +248,47 @@ class LoanRepaymentViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
 
     @action(detail=True, methods=["post"])
     def confirm(self, request, pk=None):
-        """Verify & post a reported transfer to the ledger."""
+        """Post a pending repayment — but only once the money is known to exist.
+
+        An online (Paystack) repayment is confirmed **by Paystack**, never by
+        the officer's say-so: this asks Paystack and posts only if it received
+        the full amount. Previously the button posted any pending row, so an
+        abandoned checkout — no money at all — could be marked repaid.
+
+        A reported bank transfer is the one case Paystack cannot see, since the
+        member paid the society's own bank; there the officer's check against
+        the statement is the confirmation.
+        """
+        from payments.providers import PaymentInitError
+        from payments.services import PaymentNotReceived, check_loan_payment
+
         repayment = self.get_object()
+        if repayment.status != LoanRepayment.Status.PENDING:
+            return Response({"detail": "This repayment is already confirmed."},
+                            status=400)
+
+        if repayment.channel == LoanRepayment.Channel.PSP:
+            try:
+                settled = check_loan_payment(repayment)
+            except PaymentNotReceived as exc:
+                return Response({"detail": str(exc),
+                                 "payment_status": exc.provider_status},
+                                status=400)
+            except PaymentInitError as exc:
+                return Response({"detail": str(exc)}, status=502)
+            if settled is None:
+                return Response(
+                    {"detail": "Paystack received this payment, but the loan "
+                               "was already fully repaid, so nothing was "
+                               "posted. Refund the member."}, status=409)
+            return Response({"status": "confirmed",
+                             "verified_by": "paystack"})
+
         try:
             confirm_loan_repayment(repayment, actor=request.user)
         except LoanError as exc:
             return Response({"detail": str(exc)}, status=400)
-        return Response({"status": "confirmed"})
+        return Response({"status": "confirmed", "verified_by": "officer"})
 
     @action(detail=True, methods=["post"])
     def reject(self, request, pk=None):

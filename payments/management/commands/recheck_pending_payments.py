@@ -22,8 +22,8 @@ from loans.models import LoanRepayment
 from payments.models import Provider, WalletTopUp
 from payments.providers import PaymentInitError, get_provider
 from payments import services
-from payments.services import (WalletError, recheck_wallet_topup,
-                               verify_loan_payment)
+from payments.services import (PaymentNotReceived, WalletError,
+                               recheck_wallet_topup, verify_loan_payment)
 
 
 class Command(BaseCommand):
@@ -118,6 +118,10 @@ class Command(BaseCommand):
                     self.stdout.write(f"  {label}  provider says: {status}")
                     continue
                 result = verify_loan_payment(repayment.cooperative, reference)
+            except PaymentNotReceived as exc:
+                waiting += 1
+                self.stdout.write(f"  {label}  not paid — {exc}")
+                continue
             except PaymentInitError as exc:
                 errors += 1
                 self.stdout.write(self.style.ERROR(f"  {label}  {exc}"))
