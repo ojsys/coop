@@ -35,12 +35,27 @@ class PublicPlanSerializer(serializers.ModelSerializer):
                                          read_only=True)
 
     band_label = serializers.CharField(read_only=True)
+    features = serializers.SerializerMethodField()
+    extras = serializers.SerializerMethodField()
 
     class Meta:
         model = Plan
         fields = ["id", "name", "tier", "tier_display", "price_monthly",
                   "price_annual", "price_is_from", "currency", "min_members",
-                  "max_members", "band_label", "description"]
+                  "max_members", "band_label", "description", "features",
+                  "extras"]
+
+    def get_features(self, obj) -> list:
+        """The plan's gated features, labelled, in catalogue order."""
+        from core.entitlements import CATALOGUE
+
+        keys = set(obj.features or [])
+        return [{"key": key, "label": label}
+                for key, (label, _) in CATALOGUE.items() if key in keys]
+
+    def get_extras(self, obj) -> list:
+        return [line.strip() for line in (obj.extras or "").splitlines()
+                if line.strip()]
 
 
 class PublicView(APIView):
@@ -86,6 +101,21 @@ class PublicPlansView(PublicView):
         plans = (Plan.objects.filter(active=True)
                  .order_by("min_members", "price_monthly", "name"))
         return Response(PublicPlanSerializer(plans, many=True).data)
+
+
+class PublicPlanCatalogueView(PublicView):
+    """`GET /public/plan-catalogue/` — what every plan includes, and the
+    features plans differ by. The price card renders from this, so it cannot
+    promise something the app does not gate the same way."""
+
+    def get(self, request):
+        from core.entitlements import CATALOGUE, CORE
+
+        return Response({
+            "core": CORE,
+            "features": [{"key": key, "label": label, "description": desc}
+                         for key, (label, desc) in CATALOGUE.items()],
+        })
 
 
 class PublicReferenceView(PublicView):

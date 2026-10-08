@@ -466,7 +466,15 @@ def initiate_wallet_topup(cooperative, *, amount, email, actor=None,
     import secrets
     from decimal import Decimal, InvalidOperation
 
+    from core.entitlements import (ELECTRONIC_PAYOUTS, has_feature,
+                                   not_included_message)
     from payments.models import WalletTopUp
+
+    # Funding is new use of the wallet, so it follows the plan. Withdrawing
+    # what is already there never does: it is the society's own money.
+    if not has_feature(cooperative, ELECTRONIC_PAYOUTS):
+        raise WalletError(not_included_message(cooperative,
+                                               ELECTRONIC_PAYOUTS))
 
     try:
         amount = amount if isinstance(amount, Decimal) else Decimal(str(amount))

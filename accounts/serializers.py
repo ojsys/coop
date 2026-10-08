@@ -24,6 +24,9 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
     role_name = serializers.CharField(source="role.name", default=None)
     is_privileged = serializers.SerializerMethodField()
     is_officer = serializers.SerializerMethodField()
+    # What the society's plan includes, so each surface can offer only what
+    # will work instead of letting an officer or member hit a refusal.
+    plan = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
@@ -31,7 +34,33 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
                   "cooperative_slug", "cooperative_logo",
                   "cooperative_favicon", "cooperative_brand_color",
                   "member_no", "role_slug", "role_name",
-                  "is_privileged", "is_officer", "status", "share_capital"]
+                  "is_privileged", "is_officer", "status", "share_capital",
+                  "plan"]
+
+    def get_plan(self, obj) -> dict:
+        from core.entitlements import features_for, in_grace, subscription_for
+
+        sub = subscription_for(obj.cooperative)
+        return {
+            "name": sub.plan.name if sub else None,
+            "features": sorted(features_for(obj.cooperative)),
+            # Set while the society keeps every feature regardless of plan, so
+            # the console can say when that ends.
+            "grace_until": (sub.features_grace_until
+                            if sub and in_grace(sub) else None),
+        }
+
+    def to_representation(self, instance):
+        from core.entitlements import CUSTOM_BRANDING
+
+        data = super().to_representation(instance)
+        # Branding is a plan feature: without it every surface wears the
+        # CooperativeOS look, whatever was uploaded while it was included.
+        if CUSTOM_BRANDING not in data["plan"]["features"]:
+            data["cooperative_logo"] = None
+            data["cooperative_favicon"] = None
+            data["cooperative_brand_color"] = "#0b4f3a"
+        return data
 
     def get_is_privileged(self, obj) -> bool:
         return bool(obj.role and obj.role.is_privileged)

@@ -33,6 +33,16 @@ def _get_or_provision(*, slug, name, **fields) -> Cooperative:
     return provision_cooperative(name=name, slug=slug, **fields)
 
 
+_GROWTH = ["electronic_payouts", "dividends", "savings_plans", "custom_branding"]
+# The same split platform_admin migration 0027 applies to existing databases.
+_PLAN_FEATURES = {
+    "Starter": [],
+    "Growth": _GROWTH,
+    "Professional": _GROWTH + ["custom_domain"],
+    "Institutional": _GROWTH + ["custom_domain"],
+}
+
+
 def seed_platform_data(stdout=None, style=None):
     """Populate the platform-ops tables. Returns a short summary string."""
     today = timezone.now().date()
@@ -56,6 +66,9 @@ def seed_platform_data(stdout=None, style=None):
                 price_annual=Decimal(annual) if annual else None,
                 price_is_from=is_from, min_members=lo, max_members=hi),
         )
+        if not plan.features:
+            plan.features = _PLAN_FEATURES[name]
+            plan.save(update_fields=["features", "updated_at"])
         # Demo subscriptions are keyed by the cooperative's size label; the
         # first plan per label wins, so Large maps to Professional.
         plans.setdefault(tier, plan)

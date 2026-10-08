@@ -69,6 +69,13 @@ class Plan(TimeStampedModel):
     min_members = models.PositiveIntegerField(default=0)
     max_members = models.PositiveIntegerField(default=0)
     description = models.CharField(max_length=255, blank=True)
+    # Keys from core.entitlements.CATALOGUE that this plan includes. What every
+    # plan includes (the ledger, statements, governance…) is not listed: it is
+    # never gated. Read by the API, the apps and the public price card alike.
+    features = models.JSONField(default=list, blank=True)
+    # Promises shown on the price card that no code enforces — support level,
+    # training, migration depth. One per line; publish only what is staffed.
+    extras = models.TextField(blank=True)
     active = models.BooleanField(default=True)
 
     class Meta:
@@ -132,6 +139,9 @@ class Subscription(TimeStampedModel):
     started_at = models.DateField(null=True, blank=True)
     current_period_start = models.DateField(null=True, blank=True)
     current_period_end = models.DateField(null=True, blank=True)
+    # Until this date the society keeps every feature, whatever its plan — the
+    # transition period when plan features first became enforced.
+    features_grace_until = models.DateField(null=True, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

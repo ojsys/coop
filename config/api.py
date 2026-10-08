@@ -47,6 +47,7 @@ from core.public_views import (
     PublicLegalDocumentView,
     PublicAppDownloadView,
     PublicLegalIndexView,
+    PublicPlanCatalogueView,
     PublicPlansView,
     PublicReferenceView,
     PublicSiteContentView,
@@ -143,6 +144,8 @@ urlpatterns = [
     path("public/branding/", PublicBrandingView.as_view(),
          name="public-branding"),
     path("public/plans/", PublicPlansView.as_view(), name="public-plans"),
+    path("public/plan-catalogue/", PublicPlanCatalogueView.as_view(),
+         name="public-plan-catalogue"),
     # Editable marketing copy and imagery, managed from the Django admin.
     path("public/site-content/", PublicSiteContentView.as_view(),
          name="public-site-content"),

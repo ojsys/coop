@@ -165,6 +165,17 @@ def approve_loan(loan, *, actor=None, approve=True, auto_disburse=True):
     if not (approve and auto_disburse):
         return loan
 
+    from core.entitlements import ELECTRONIC_PAYOUTS, has_feature
+
+    if not has_feature(loan.cooperative, ELECTRONIC_PAYOUTS):
+        # The plan pays loans by hand, so this is the normal path, not a
+        # failure: no officer alert, which would otherwise fire on every
+        # approval for every society on such a plan.
+        loan.auto_disbursement_error = (
+            "Approved. Your plan does not include electronic payouts, so "
+            "disburse it in cash or by bank transfer.")
+        return loan
+
     from payments.providers import PaymentInitError
     from payments.services import PayoutError
 
@@ -488,6 +499,8 @@ def disburse_loan_electronically(loan, *, actor=None):
     is also when the wallet is debited. A transfer can still fail afterwards;
     that reverses the journal and returns the loan to approved.
     """
+    from core.entitlements import (ELECTRONIC_PAYOUTS, has_feature,
+                                   not_included_message)
     from ledger.models import Account
     from loans.models import Loan
     from payments.models import Payout
@@ -495,6 +508,10 @@ def disburse_loan_electronically(loan, *, actor=None):
 
     if loan.status != Loan.Status.APPROVED:
         raise LoanError("Only an approved loan can be disbursed.")
+    if not has_feature(loan.cooperative, ELECTRONIC_PAYOUTS):
+        raise LoanError(
+            not_included_message(loan.cooperative, ELECTRONIC_PAYOUTS)
+            + " Disburse it in cash or by bank transfer instead.")
     if not loan.destination_is_payable:
         raise LoanError(
             "This loan has no bank code and account number recorded, so it "

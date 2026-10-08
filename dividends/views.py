@@ -6,16 +6,21 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.context import get_current_cooperative
+from core.entitlements import DIVIDENDS, RequiresFeatureMixin
 from core.views import TenantScopedViewMixin
 from dividends.models import DividendDeclaration
 from dividends.serializers import DividendDeclarationSerializer
 from dividends.services import declare_dividend, post_dividend
 
 
-class DividendViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
-                      mixins.RetrieveModelMixin, mixins.DestroyModelMixin,
-                      viewsets.GenericViewSet):
+class DividendViewSet(RequiresFeatureMixin, TenantScopedViewMixin,
+                      mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                      mixins.DestroyModelMixin, viewsets.GenericViewSet):
     """Declare, preview, post and review dividend distributions."""
+
+    # Reviewing past distributions stays open on every plan; declaring and
+    # posting new ones needs a plan that includes dividends.
+    required_feature = DIVIDENDS
 
     serializer_class = DividendDeclarationSerializer
     permission_classes = [IsAuthenticated]

@@ -39,3 +39,21 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
                   "favicon", "member_cap",
                   "contact_email", "contact_phone", "contact_address",
                   "statement_footer"]
+
+    _BRANDING = ("logo", "favicon", "brand_color")
+
+    def validate(self, attrs):
+        """Changing the society's branding follows its plan.
+
+        A platform admin may still set it — e.g. while onboarding a society
+        that is moving to a plan which includes it.
+        """
+        from core.entitlements import CUSTOM_BRANDING, require_feature
+
+        request = self.context.get("request")
+        changing = [f for f in self._BRANDING if f in attrs and (
+            self.instance is None or attrs[f] != getattr(self.instance, f))]
+        if (changing and self.instance is not None and request is not None
+                and not getattr(request.user, "is_platform_admin", False)):
+            require_feature(self.instance, CUSTOM_BRANDING)
+        return attrs

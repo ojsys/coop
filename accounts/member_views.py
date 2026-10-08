@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 
 from accounts.models import MemberDocument, Membership
 from accounts.serializers import MemberDocumentSerializer, MemberSelfSerializer
+from core.entitlements import SAVINGS_PLANS, RequiresFeatureMixin
 from core.views import TenantScopedViewMixin
 from dividends.models import DividendAllocation
 from dividends.serializers import MemberDividendSerializer
@@ -228,8 +229,12 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         return Response(data)
 
 
-class MemberSavingsGoalViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
+class MemberSavingsGoalViewSet(RequiresFeatureMixin, TenantScopedViewMixin,
+                               viewsets.ModelViewSet):
     """`/me/savings-goals/` — the member's own savings goals (full CRUD)."""
+
+    # Existing goals stay readable on every plan; new ones need savings plans.
+    required_feature = SAVINGS_PLANS
 
     serializer_class = MemberSavingsGoalWriteSerializer
     permission_classes = [IsAuthenticated]

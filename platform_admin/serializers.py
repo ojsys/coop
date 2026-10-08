@@ -22,8 +22,17 @@ class PlanSerializer(serializers.ModelSerializer):
         model = Plan
         fields = ["id", "name", "tier", "tier_display", "price_monthly",
                   "price_annual", "price_is_from", "currency", "min_members",
-                  "max_members", "band_label", "description", "active",
-                  "subscriber_count", "created_at"]
+                  "max_members", "band_label", "description", "features",
+                  "extras", "active", "subscriber_count", "created_at"]
+
+    def validate_features(self, value):
+        from core.entitlements import CATALOGUE
+
+        unknown = sorted(set(value or []) - set(CATALOGUE))
+        if unknown:
+            raise serializers.ValidationError(
+                f"Unknown feature(s): {', '.join(unknown)}.")
+        return sorted(set(value or []))
 
     def get_subscriber_count(self, obj) -> int:
         # Annotated in the viewset queryset; fall back to a live count.
@@ -44,7 +53,8 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         fields = ["id", "cooperative", "cooperative_name", "plan", "plan_name",
                   "status", "status_display", "billing_cycle",
                   "price_override", "cycle_amount", "monthly_value",
-                  "started_at", "current_period_start", "current_period_end",
+                  "features_grace_until", "started_at",
+                  "current_period_start", "current_period_end",
                   "created_at"]
         read_only_fields = ["monthly_value"]
 
@@ -115,6 +125,18 @@ class DomainSerializer(serializers.ModelSerializer):
                   "is_primary", "dns_status", "ssl_status", "verified_at",
                   "verification", "created_at"]
         read_only_fields = ["verified_at"]
+
+    def validate(self, attrs):
+        """A new custom domain needs a plan that includes one."""
+        from core.entitlements import (CUSTOM_DOMAIN, has_feature,
+                                       not_included_message)
+
+        coop = attrs.get("cooperative")
+        if self.instance is None and coop and not has_feature(coop,
+                                                              CUSTOM_DOMAIN):
+            raise serializers.ValidationError(
+                {"cooperative": not_included_message(coop, CUSTOM_DOMAIN)})
+        return attrs
 
     def get_verification(self, obj) -> dict:
         """The exact DNS record a cooperative admin must add, in plain terms."""

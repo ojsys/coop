@@ -7,6 +7,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from core.context import get_current_cooperative
+from core.entitlements import SAVINGS_PLANS, RequiresFeatureMixin
 from core.permissions import IsPrivilegedOfficerOrReadOnly
 from core.views import TenantScopedViewMixin
 from savings.models import SavingsGoal, SavingsProduct, Withdrawal
@@ -15,7 +16,9 @@ from savings.serializers import (SavingsGoalSerializer,
                                 WithdrawalSerializer)
 
 
-class SavingsProductViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
+class SavingsProductViewSet(RequiresFeatureMixin, TenantScopedViewMixin,
+                            viewsets.ModelViewSet):
+    required_feature = SAVINGS_PLANS
     serializer_class = SavingsProductSerializer
     permission_classes = [IsAuthenticated]
 
@@ -23,7 +26,9 @@ class SavingsProductViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         return SavingsProduct.objects.select_related("contribution_type")
 
 
-class SavingsGoalViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
+class SavingsGoalViewSet(RequiresFeatureMixin, TenantScopedViewMixin,
+                         viewsets.ModelViewSet):
+    required_feature = SAVINGS_PLANS
     serializer_class = SavingsGoalSerializer
     permission_classes = [IsAuthenticated]
 
