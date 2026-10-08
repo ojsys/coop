@@ -2,7 +2,7 @@
 The subscription billing cycle.
 
 A cooperative goes live, operates free for ``BILLING_TRIAL_DAYS``, and is then
-invoiced monthly. While an invoice is outstanding it is reminded every
+invoiced monthly or annually, per its subscription's billing cycle. While an invoice is outstanding it is reminded every
 ``BILLING_REMINDER_INTERVAL_DAYS``; if it is still unpaid
 ``BILLING_SUSPEND_AFTER_DAYS`` past the due date, the cooperative is suspended.
 
@@ -36,10 +36,36 @@ def _add_month(d: date) -> date:
                      day=min(d.day, calendar.monthrange(year, month)[1]))
 
 
+def _add_months(d: date, n: int) -> date:
+    for _ in range(n):
+        d = _add_month(d)
+    return d
+
+
+def active_members(cooperative) -> int:
+    from accounts.models import Membership
+
+    return Membership.all_objects.filter(
+        cooperative=cooperative, status=Membership.Status.ACTIVE).count()
+
+
 def plan_for(cooperative) -> Plan | None:
-    """The active plan matching a cooperative's tier, cheapest first."""
-    return (Plan.objects.filter(tier=cooperative.tier, active=True)
-            .order_by("price_monthly").first())
+    """The active plan whose member band holds this cooperative.
+
+    Chosen by active member count, the thing a buyer can verify, rather than
+    by the cooperative's size label — the labels and bands used to disagree.
+    A society below the smallest band — a new one still adding its members —
+    starts on the entry plan. One above every configured band gets ``None``:
+    putting it on a cheaper plan would be guessing at its price.
+    """
+    plans = list(Plan.objects.filter(active=True)
+                 .order_by("min_members", "price_monthly"))
+    if not plans:
+        return None
+    members = active_members(cooperative)
+    if members < plans[0].min_members:
+        return plans[0]
+    return next((p for p in plans if p.holds(members)), None)
 
 
 def ensure_subscription(cooperative, *, today: date | None = None):
@@ -69,13 +95,36 @@ def ensure_subscription(cooperative, *, today: date | None = None):
     )
 
 
-def _period_label(start: date) -> str:
-    return start.strftime("%b %Y")
+def _period_months(subscription) -> int:
+    return 12 if subscription.is_annual else 1
+
+
+def _period_label(start: date, months: int = 1) -> str:
+    if months == 1:
+        return start.strftime("%b %Y")
+    last = _add_months(start, months - 1)
+    return f"{start.strftime('%b %Y')} – {last.strftime('%b %Y')}"
+
+
+class UnpricedSubscription(Exception):
+    """An annual subscription whose price has to be quoted and has not been."""
 
 
 def open_invoice(subscription, *, today: date | None = None) -> Invoice:
-    """Raise the invoice for the period that has just begun."""
+    """Raise the invoice for the period that has just begun.
+
+    One month or twelve, per the subscription's billing cycle. Raises
+    :class:`UnpricedSubscription` rather than inventing a figure when an
+    annual price is quoted per society and none has been recorded.
+    """
     from platform_admin.services import next_invoice_number
+
+    amount = subscription.cycle_amount
+    if amount is None:
+        raise UnpricedSubscription(
+            f"{subscription.cooperative.name} is on annual billing for "
+            f"{subscription.plan.name}, which is quoted per society, and no "
+            f"negotiated price is recorded.")
 
     today = today or timezone.localdate()
     start = subscription.current_period_end or today
@@ -83,8 +132,8 @@ def open_invoice(subscription, *, today: date | None = None) -> Invoice:
         cooperative=subscription.cooperative,
         subscription=subscription,
         number=next_invoice_number(),
-        period_label=_period_label(start),
-        amount=subscription.plan.price_monthly,
+        period_label=_period_label(start, _period_months(subscription)),
+        amount=amount,
         currency=subscription.plan.currency,
         status=Invoice.Status.SENT,
         issued_at=today,
@@ -94,7 +143,7 @@ def open_invoice(subscription, *, today: date | None = None) -> Invoice:
 
 
 def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
-    """Mark an invoice paid and roll its subscription on a month.
+    """Mark an invoice paid and roll its subscription on one billing period.
 
     The single path used by the platform admin's "mark paid" action and by the
     Paystack verification, so a bank transfer and a card payment leave the
@@ -113,7 +162,7 @@ def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
         sub.status = Subscription.Status.ACTIVE
         start = sub.current_period_end or paid_on
         sub.current_period_start = start
-        sub.current_period_end = _add_month(start)
+        sub.current_period_end = _add_months(start, _period_months(sub))
         sub.save(update_fields=["status", "current_period_start",
                                 "current_period_end", "updated_at"])
 
@@ -156,7 +205,7 @@ def run_billing_cycle(*, dry_run: bool = False, cooperative=None,
 
     today = today or timezone.localdate()
     report = {"issued": [], "reminded": [], "overdue": [], "suspended": [],
-              "dry_run": dry_run}
+              "unpriced": [], "dry_run": dry_run}
 
     # 1. Periods that have ended get an invoice — unless one is already open,
     #    which is what makes a second run in the same day harmless.
@@ -170,6 +219,11 @@ def run_billing_cycle(*, dry_run: bool = False, cooperative=None,
 
     for sub in subs:
         if _outstanding(sub.cooperative).exists():
+            continue
+        if sub.cycle_amount is None:
+            # Never invoice a guessed figure; surface it for a quote instead.
+            report["unpriced"].append(
+                f"{sub.cooperative.name} · {sub.plan.name}")
             continue
         report["issued"].append(f"{sub.cooperative.name} · {sub.plan.name}")
         if dry_run:

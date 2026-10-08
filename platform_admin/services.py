@@ -103,7 +103,7 @@ def subscription_mrr() -> Decimal:
     total = (
         Subscription.objects
         .filter(status=Subscription.Status.ACTIVE)
-        .aggregate(s=Sum("plan__price_monthly"))["s"]
+        .aggregate(s=Sum("monthly_value"))["s"]
     )
     return total or ZERO
 
@@ -117,7 +117,7 @@ def subscription_breakdown() -> dict:
     rows = {
         r["status"]: {"count": r["c"], "value": r["v"] or ZERO}
         for r in Subscription.objects.values("status").annotate(
-            c=Count("id"), v=Sum("plan__price_monthly"))
+            c=Count("id"), v=Sum("monthly_value"))
     }
     empty = {"count": 0, "value": ZERO}
     return {
@@ -307,13 +307,13 @@ def mrr_trend(months: int = 6) -> list:
     subs = list(
         Subscription.objects
         .filter(status=Subscription.Status.ACTIVE)
-        .values("started_at", "plan__price_monthly")
+        .values("started_at", "monthly_value")
     )
     series = []
     for year, month, label in _month_window(months):
         end = _month_end(year, month).date()
         total = sum(
-            (s["plan__price_monthly"] or ZERO)
+            (s["monthly_value"] or ZERO)
             for s in subs
             if s["started_at"] is None or s["started_at"] <= end
         )
@@ -329,8 +329,8 @@ def revenue_by_tier() -> list:
         Subscription.objects
         .filter(status=Subscription.Status.ACTIVE)
         .values("plan__tier")
-        .annotate(coops=Count("id"), revenue=Sum("plan__price_monthly"))
-        .order_by("plan__price_monthly")
+        .annotate(coops=Count("id"), revenue=Sum("monthly_value"))
+        .order_by("revenue")
     )
     return [
         {"tier": r["plan__tier"], "coops": r["coops"],
@@ -483,10 +483,10 @@ def _net_revenue_retention() -> int:
     """Simple NRR proxy: active-subscription MRR vs. all-subscription MRR."""
     active = (
         Subscription.objects.filter(status=Subscription.Status.ACTIVE)
-        .aggregate(s=Sum("plan__price_monthly"))["s"] or ZERO
+        .aggregate(s=Sum("monthly_value"))["s"] or ZERO
     )
     total = (
-        Subscription.objects.aggregate(s=Sum("plan__price_monthly"))["s"]
+        Subscription.objects.aggregate(s=Sum("monthly_value"))["s"]
         or ZERO
     )
     return round(active / total * 100) if total else 100

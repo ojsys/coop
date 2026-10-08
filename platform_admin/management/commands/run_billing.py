@@ -59,8 +59,16 @@ class Command(BaseCommand):
             for row in rows:
                 self.stdout.write(f"  - {row}")
 
+        if report["unpriced"]:
+            self.stdout.write(self.style.WARNING(
+                f"{len(report['unpriced'])} not invoiced — annual price is "
+                f"quoted per society and none is recorded on the "
+                f"subscription:"))
+            for row in report["unpriced"]:
+                self.stdout.write(f"  - {row}")
+
         if not any(report[k] for k in ("issued", "overdue", "reminded",
-                                       "suspended")):
+                                       "suspended", "unpriced")):
             self.stdout.write("Nothing due. No invoices, reminders or "
                               "suspensions.")
             return

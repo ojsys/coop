@@ -92,10 +92,20 @@ def test_cooperatives_that_are_not_live_are_left_alone(starter):
     assert Subscription.objects.count() == 0
 
 
-def test_a_tier_with_no_plan_is_skipped_not_guessed(starter):
-    """A Large cooperative with only a Small plan configured must not be put
-    on the wrong price."""
+def test_a_society_above_every_band_is_skipped_not_guessed(starter):
+    """A cooperative larger than any configured band must not be put on a
+    cheaper plan's price."""
+    from accounts.models import Membership, User
+
+    starter.min_members, starter.max_members = 0, 2
+    starter.save()
     big = _live("fed-institution", tier=Cooperative.Tier.LARGE)
+    for n in range(3):
+        user = User.objects.create_user(email=f"m{n}@fed.coop",
+                                        full_name=f"M {n}", password="x")
+        Membership.all_objects.create(cooperative=big, user=user,
+                                      member_no=f"F-{n}",
+                                      status=Membership.Status.ACTIVE)
 
     call_command("backfill_subscriptions")
 

@@ -34,10 +34,13 @@ class PublicPlanSerializer(serializers.ModelSerializer):
     tier_display = serializers.CharField(source="get_tier_display",
                                          read_only=True)
 
+    band_label = serializers.CharField(read_only=True)
+
     class Meta:
         model = Plan
         fields = ["id", "name", "tier", "tier_display", "price_monthly",
-                  "currency", "min_members", "max_members", "description"]
+                  "price_annual", "price_is_from", "currency", "min_members",
+                  "max_members", "band_label", "description"]
 
 
 class PublicView(APIView):
@@ -72,7 +75,7 @@ class PublicBrandingView(PublicView):
 
 
 class PublicPlansView(PublicView):
-    """`GET /public/plans/` — active plans, cheapest first.
+    """`GET /public/plans/` — active plans, smallest member band first.
 
     Served live from the database so published pricing cannot drift from what
     cooperatives are actually billed. Inactive plans are withheld: they are
@@ -81,7 +84,7 @@ class PublicPlansView(PublicView):
 
     def get(self, request):
         plans = (Plan.objects.filter(active=True)
-                 .order_by("price_monthly", "name"))
+                 .order_by("min_members", "price_monthly", "name"))
         return Response(PublicPlanSerializer(plans, many=True).data)
 
 

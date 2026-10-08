@@ -27,7 +27,7 @@ from __future__ import annotations
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from platform_admin.billing import ensure_subscription, plan_for
+from platform_admin.billing import active_members, ensure_subscription, plan_for
 from platform_admin.models import Subscription
 from tenants.models import Cooperative
 
@@ -84,11 +84,12 @@ class Command(BaseCommand):
         if no_plan:
             self.stdout.write("")
             self.stdout.write(self.style.WARNING(
-                "No active plan matches these cooperatives' tier, so they "
-                "cannot be billed. Create a plan for the tier and re-run — "
-                "until then they operate free and nothing says so:"))
+                "No active plan's member band holds these cooperatives, so "
+                "they cannot be billed. Create a plan for their band and "
+                "re-run — until then they operate free and nothing says so:"))
             for coop in no_plan:
-                self.stdout.write(f"  - {coop.slug} ({coop.get_tier_display()})")
+                self.stdout.write(
+                    f"  - {coop.slug} ({active_members(coop):,} members)")
 
         if dry_run:
             self.stdout.write("")

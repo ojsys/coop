@@ -31,18 +31,39 @@ def make_pay_token() -> str:
 
 # ── Billing ────────────────────────────────────────────────────────────────
 class Plan(TimeStampedModel):
-    """A subscription plan a cooperative can be billed on."""
+    """A subscription plan a cooperative can be billed on.
+
+    Plans are sold by **member band** — ``min_members``..``max_members`` active
+    members, ``max_members = 0`` meaning no upper bound — and a society is put
+    on the plan whose band holds its member count (see
+    ``billing.plan_for``). The old size labels ("Small (50-500)" and so on)
+    overlapped each other and the published bands, so agents quoted different
+    prices to similar societies; the band is now the single definition.
+
+    ``price_annual`` is what a year costs when paid up front (two months free
+    against monthly). Blank means the annual price is quoted per society, as for
+    Institutional. ``price_is_from`` marks ``price_monthly`` as a starting price
+    rather than a fixed one.
+    """
 
     class Tier(models.TextChoices):
-        SMALL = "small", "Small (50-500)"
-        MEDIUM = "medium", "Medium (500-5,000)"
-        LARGE = "large", "Large / Institutional"
+        # A coarse grouping for platform analytics only. Deliberately carries
+        # no member numbers: those live on the band fields, once.
+        SMALL = "small", "Small"
+        MEDIUM = "medium", "Medium"
+        LARGE = "large", "Large"
 
     name = models.CharField(max_length=120)
     tier = models.CharField(max_length=10, choices=Tier.choices,
                             default=Tier.SMALL)
     price_monthly = models.DecimalField(max_digits=12, decimal_places=2,
                                         default=0)
+    price_annual = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Price for a year paid up front. Blank = quoted per society.")
+    price_is_from = models.BooleanField(
+        default=False,
+        help_text="Show the monthly price as a starting price (\"From …\").")
     currency = models.CharField(max_length=3,
                                 default=settings.DEFAULT_CURRENCY)
     min_members = models.PositiveIntegerField(default=0)
@@ -51,20 +72,42 @@ class Plan(TimeStampedModel):
     active = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["price_monthly", "name"]
+        ordering = ["min_members", "price_monthly", "name"]
 
     def __str__(self) -> str:
-        return f"{self.name} ({self.get_tier_display()})"
+        return f"{self.name} ({self.band_label})"
+
+    @property
+    def band_label(self) -> str:
+        """"50–250 members", "5,001+ members" — the one way a band is written."""
+        if not self.max_members:
+            return f"{self.min_members:,}+ members"
+        return f"{self.min_members:,}–{self.max_members:,} members"
+
+    def holds(self, members: int) -> bool:
+        return members >= self.min_members and (
+            not self.max_members or members <= self.max_members)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        # A price change must reach the revenue figures, which read each
+        # subscription's stored monthly value rather than re-deriving it.
+        for sub in self.subscriptions.all():
+            sub.save(update_fields=["monthly_value", "updated_at"])
 
 
 class Subscription(TimeStampedModel):
-    """Ties a cooperative to the plan it pays for."""
+    """Ties a cooperative to the plan it pays for, monthly or annually."""
 
     class Status(models.TextChoices):
         TRIAL = "trial", "Trial"
         ACTIVE = "active", "Active"
         PAST_DUE = "past_due", "Past due"
         CANCELED = "canceled", "Canceled"
+
+    class Cycle(models.TextChoices):
+        MONTHLY = "monthly", "Monthly"
+        ANNUAL = "annual", "Annual"
 
     cooperative = models.OneToOneField(
         "tenants.Cooperative", on_delete=models.CASCADE,
@@ -74,6 +117,18 @@ class Subscription(TimeStampedModel):
                              related_name="subscriptions")
     status = models.CharField(max_length=10, choices=Status.choices,
                               default=Status.TRIAL)
+    billing_cycle = models.CharField(max_length=8, choices=Cycle.choices,
+                                     default=Cycle.MONTHLY)
+    # A price agreed with this one society, per billing cycle — how an
+    # Institutional quote is recorded. Blank means the plan's list price.
+    price_override = models.DecimalField(
+        max_digits=12, decimal_places=2, null=True, blank=True,
+        help_text="Negotiated price per billing cycle. Blank = list price.")
+    # What this subscription is worth per month, kept beside it so revenue can
+    # be summed in the database. An annual subscription is a twelfth of its
+    # annual price, not the monthly list price. Recomputed on every save.
+    monthly_value = models.DecimalField(max_digits=12, decimal_places=2,
+                                        default=0, editable=False)
     started_at = models.DateField(null=True, blank=True)
     current_period_start = models.DateField(null=True, blank=True)
     current_period_end = models.DateField(null=True, blank=True)
@@ -83,6 +138,37 @@ class Subscription(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.cooperative} → {self.plan.name}"
+
+    @property
+    def is_annual(self) -> bool:
+        return self.billing_cycle == self.Cycle.ANNUAL
+
+    @property
+    def cycle_amount(self):
+        """What one invoice for this subscription is for, or ``None`` when an
+        annual price has to be quoted and has not been."""
+        if self.price_override is not None:
+            return self.price_override
+        if self.is_annual:
+            return self.plan.price_annual
+        return self.plan.price_monthly
+
+    def _monthly_value(self):
+        from decimal import Decimal
+
+        amount = self.cycle_amount
+        if amount is None:
+            return Decimal("0.00")
+        if self.is_annual:
+            return (amount / 12).quantize(Decimal("0.01"))
+        return amount
+
+    def save(self, *args, **kwargs):
+        self.monthly_value = self._monthly_value()
+        fields = kwargs.get("update_fields")
+        if fields is not None and "monthly_value" not in fields:
+            kwargs["update_fields"] = [*fields, "monthly_value"]
+        super().save(*args, **kwargs)
 
 
 class Invoice(TimeStampedModel):
@@ -703,10 +789,11 @@ class SiteContent(TimeStampedModel):
 
     # ── Pricing ─────────────────────────────────────────────────────────────
     pricing_title = models.CharField(
-        max_length=120, default="Pricing that follows your size")
+        max_length=120, default="Pricing by member band")
     pricing_intro = models.TextField(
-        default="A monthly subscription per cooperative — not a cut of your "
-                "members' money.",
+        default="One subscription per cooperative, set by how many active "
+                "members you have — never a cut of your members' money. Pay "
+                "annually and get two months free.",
     )
     pricing_fallback = models.TextField(
         default="Pricing depends on your cooperative's size and how much "

@@ -20,9 +20,13 @@ class Cooperative(TimeStampedModel):
         CLOSED = "closed", "Closed"
 
     class Tier(models.TextChoices):
-        SMALL = "small", "Small (50-500)"
-        MEDIUM = "medium", "Medium (500-5,000)"
-        LARGE = "large", "Large / Institutional"
+        # A coarse size label for reporting. Carries no member numbers on
+        # purpose: billing follows the plan's member band (see
+        # platform_admin.billing.plan_for), and ranges written here disagreed
+        # with those bands.
+        SMALL = "small", "Small"
+        MEDIUM = "medium", "Medium"
+        LARGE = "large", "Large"
 
     name = models.CharField(max_length=200)
     slug = models.SlugField(max_length=80, unique=True)

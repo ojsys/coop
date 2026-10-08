@@ -16,12 +16,14 @@ class PlanSerializer(serializers.ModelSerializer):
     tier_display = serializers.CharField(source="get_tier_display",
                                          read_only=True)
     subscriber_count = serializers.SerializerMethodField()
+    band_label = serializers.CharField(read_only=True)
 
     class Meta:
         model = Plan
         fields = ["id", "name", "tier", "tier_display", "price_monthly",
-                  "currency", "min_members", "max_members", "description",
-                  "active", "subscriber_count", "created_at"]
+                  "price_annual", "price_is_from", "currency", "min_members",
+                  "max_members", "band_label", "description", "active",
+                  "subscriber_count", "created_at"]
 
     def get_subscriber_count(self, obj) -> int:
         # Annotated in the viewset queryset; fall back to a live count.
@@ -34,12 +36,39 @@ class SubscriptionSerializer(serializers.ModelSerializer):
     plan_name = serializers.CharField(source="plan.name", read_only=True)
     status_display = serializers.CharField(source="get_status_display",
                                            read_only=True)
+    cycle_amount = serializers.DecimalField(max_digits=12, decimal_places=2,
+                                            read_only=True)
 
     class Meta:
         model = Subscription
         fields = ["id", "cooperative", "cooperative_name", "plan", "plan_name",
-                  "status", "status_display", "started_at",
-                  "current_period_start", "current_period_end", "created_at"]
+                  "status", "status_display", "billing_cycle",
+                  "price_override", "cycle_amount", "monthly_value",
+                  "started_at", "current_period_start", "current_period_end",
+                  "created_at"]
+        read_only_fields = ["monthly_value"]
+
+    def validate(self, attrs):
+        """An annual subscription needs a price to invoice.
+
+        Institutional is quoted per society, so annual billing on it must carry
+        the negotiated figure — otherwise the renewal would have nothing to
+        charge and billing would skip it.
+        """
+        def current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, None)
+
+        plan = current("plan")
+        cycle = current("billing_cycle") or Subscription.Cycle.MONTHLY
+        if (cycle == Subscription.Cycle.ANNUAL and plan is not None
+                and plan.price_annual is None
+                and current("price_override") is None):
+            raise serializers.ValidationError({
+                "price_override": f"{plan.name} has no list annual price — "
+                                  f"enter the price quoted to this society."})
+        return attrs
 
 
 class InvoiceSerializer(serializers.ModelSerializer):

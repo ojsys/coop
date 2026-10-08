@@ -37,22 +37,27 @@ def seed_platform_data(stdout=None, style=None):
     today = timezone.now().date()
 
     # ── Plans ───────────────────────────────────────────────────────────────
+    # The member-band price list from the October 2026 pricing audit — the
+    # same rows platform_admin migration 0025 installs on existing databases.
     plan_specs = [
-        ("Starter", Plan.Tier.SMALL, "10000", 50, 500,
-         "For thrift & credit and small multipurpose coops."),
-        ("Growth", Plan.Tier.MEDIUM, "35000", 500, 5000,
-         "For established cooperatives scaling operations."),
-        ("Institutional", Plan.Tier.LARGE, "150000", 5000, 0,
-         "For large societies and federations."),
+        ("Starter", Plan.Tier.SMALL, "9000", "90000", 50, 250, False),
+        ("Growth", Plan.Tier.MEDIUM, "15000", "150000", 251, 1000, False),
+        ("Professional", Plan.Tier.LARGE, "29000", "290000", 1001, 5000,
+         False),
+        ("Institutional", Plan.Tier.LARGE, "49000", None, 5001, 0, True),
     ]
     plans = {}
-    for name, tier, price, lo, hi, desc in plan_specs:
+    for name, tier, monthly, annual, lo, hi, is_from in plan_specs:
         plan, _ = Plan.objects.get_or_create(
             name=name,
-            defaults=dict(tier=tier, price_monthly=Decimal(price),
-                          min_members=lo, max_members=hi, description=desc),
+            defaults=dict(
+                tier=tier, price_monthly=Decimal(monthly),
+                price_annual=Decimal(annual) if annual else None,
+                price_is_from=is_from, min_members=lo, max_members=hi),
         )
-        plans[tier] = plan
+        # Demo subscriptions are keyed by the cooperative's size label; the
+        # first plan per label wins, so Large maps to Professional.
+        plans.setdefault(tier, plan)
 
     # ── Extra cooperatives (breadth for cross-tenant analytics) ─────────────
     coop_specs = [
