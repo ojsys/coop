@@ -158,3 +158,79 @@ def test_old_cash_bookings_are_moved_to_the_wallet(loan, monkeypatch,
     assert _bal(coop, "5000") == Decimal("512.50")
     assert cash_before - _bal(coop, "1000") == Decimal("27500.00")
     assert trial_balance(coop)["balanced"] is True
+
+
+# ── The member pays Paystack's fee, not the society ────────────────────────
+@pytest.mark.parametrize("amount", ["1000", "2400", "2500", "27500",
+                                    "100000", "133333", "1000000"])
+def test_the_gross_up_leaves_exactly_the_repayment(amount):
+    """In every pricing band: no flat fee, flat fee, capped."""
+    from payments.fees import gross_up, paystack_fee
+
+    charge = gross_up(amount)
+    assert charge - paystack_fee(charge) == Decimal(amount)
+
+
+def test_when_the_member_pays_the_fee_the_wallet_gets_it_all(loan):
+    from payments.fees import gross_up, paystack_fee
+
+    coop = loan.cooperative
+    paid = gross_up("27500")
+    with use_tenant(coop):
+        confirm_loan_repayment(_online(loan), receipt={
+            "amount": paid, "fee": paystack_fee(paid), "subaccount": False})
+    loan.refresh_from_db()
+
+    assert _bal(coop, "1020") == Decimal("27500.00")
+    assert _bal(coop, "5000") == Decimal("0.00"), "no cost to the society"
+    assert loan.outstanding == Decimal("82500.00")
+    assert trial_balance(coop)["balanced"] is True
+
+
+def test_a_card_paystack_priced_higher_is_booked_as_it_happened(loan):
+    """An international card: Paystack takes more than the member covered."""
+    from payments.fees import gross_up
+
+    coop = loan.cooperative
+    paid = gross_up("27500")                       # 28,020.31
+    with use_tenant(coop):
+        confirm_loan_repayment(_online(loan), receipt={
+            "amount": paid, "fee": Decimal("1192.79"), "subaccount": False})
+
+    assert _bal(coop, "1020") == paid - Decimal("1192.79")
+    assert _bal(coop, "5000") == Decimal("672.48")
+    assert trial_balance(coop)["balanced"] is True
+
+
+def test_checkout_charges_the_repayment_plus_the_fee(loan, member,
+                                                     monkeypatch, settings):
+    from rest_framework.authtoken.models import Token
+    from rest_framework.test import APIClient
+
+    from payments import services
+    from payments.fees import gross_up
+
+    settings.PAYSTACK_SECRET_KEY = "sk_live_real"
+    sent = {}
+
+    class _Stub:
+        def initialize_transaction(self, **kw):
+            sent.update(kw)
+            return "https://checkout.paystack.test/x"
+
+    monkeypatch.setattr(services, "get_provider", lambda name: _Stub())
+    token, _ = Token.objects.get_or_create(user=member.user)
+    client = APIClient()
+    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}",
+                       HTTP_X_COOPERATIVE_ID=str(loan.cooperative_id))
+
+    quote = client.get(f"/api/v1/me/loans/{loan.id}/repay-quote/",
+                       {"amount": "27500"}).json()
+    resp = client.post(f"/api/v1/me/loans/{loan.id}/repay-initiate/",
+                       {"amount": "27500"}, format="json").json()
+
+    assert quote == {"amount": "27500.00", "fee": "520.31",
+                     "total": "28020.31"}
+    assert sent["amount"] == gross_up("27500")
+    assert resp["amount_kobo"] == 2802031
+    assert resp["fee"] == "520.31"

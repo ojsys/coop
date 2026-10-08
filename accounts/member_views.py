@@ -127,6 +127,29 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         serializer.save(membership=_membership(self.request),
                         status=Loan.Status.PENDING)
 
+    @action(detail=True, methods=["get"], url_path="repay-quote")
+    def repay_quote(self, request, pk=None):
+        """What paying ``?amount=`` online costs the member, fee included.
+
+        Shown before checkout, so the member is never surprised by a total
+        larger than the repayment they typed.
+        """
+        from decimal import Decimal, InvalidOperation
+
+        from payments.fees import gross_up
+
+        self.get_object()   # their own loan only
+        try:
+            amount = Decimal(request.query_params.get("amount") or "0")
+        except InvalidOperation:
+            raise ValidationError("Enter a valid amount.")
+        if amount <= 0:
+            raise ValidationError("Enter an amount above zero.")
+        total = gross_up(amount)
+        return Response({"amount": str(amount.quantize(Decimal("0.01"))),
+                         "fee": str(total - amount.quantize(Decimal("0.01"))),
+                         "total": str(total)})
+
     @action(detail=True, methods=["post"], url_path="repay-initiate")
     def repay_initiate(self, request, pk=None):
         """Start an online repayment on the member's own loan and return the
@@ -164,14 +187,22 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
             # left behind, it would sit pending for officers to puzzle over.
             repayment.delete()
 
+        from payments.fees import gross_up
+
+        # The member pays Paystack's fee on top; the inline checkout charges
+        # amount_kobo, so it must be the grossed-up figure, the same one the
+        # server-side checkout was initialised with.
+        total = gross_up(repayment.amount)
         return Response({
             "reference": reference,
             "amount": str(repayment.amount),
+            "fee": str(total - repayment.amount),
+            "total": str(total),
             "authorization_url": authorization_url,
             "payment_error": payment_error,
             "paystack_public_key": dj_settings.PAYSTACK_PUBLIC_KEY or None,
             "payer_email": loan.membership.user.email,
-            "amount_kobo": int(repayment.amount * 100),
+            "amount_kobo": int(total * 100),
             "payment_simulated": (
                 dj_settings.PAYSTACK_SECRET_KEY.startswith("sk_test_dev")
                 and not dj_settings.PAYSTACK_PUBLIC_KEY),

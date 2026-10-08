@@ -637,15 +637,23 @@ def receipt_lines(loan, amount, *, channel, receipt=None):
     * **transfer** — the member paid the society's own account: Bank (1010).
     * **psp** (Paystack) — the platform's Paystack balance, which is exactly
       what the disbursement wallet (1020) represents, so a repayment is lendable
-      again at once. Paystack deducts its fee before the money lands, so the
-      wallet gets the net and the fee goes to Payment Charges (5000) — the same
-      treatment as a wallet top-up. When the charge was split to the society's
-      own subaccount the money went to its bank instead (1010).
+      again at once. When the charge was split to the society's own subaccount
+      the money went to its bank instead (1010).
+
+    Paystack's fee is the member's to pay: checkout charges the repayment
+    *plus* the fee (payments.fees.gross_up), so what lands is the whole
+    repayment. Booked as what actually happened — the wallet gets what
+    Paystack paid out, Paystack's fee is a Payment Charge (5000), and the fee
+    the member paid offsets it — so Payment Charges nets to nothing, or to the
+    small difference when Paystack priced the card differently (an
+    international card, say). A charge made before fees were passed on carries
+    no surcharge, and its fee stays the society's cost.
 
     Previously every repayment debited Cash, so an online repayment never
     reached the wallet the next loan is paid from.
 
-    ``receipt`` is the provider's view of the charge: ``{"fee", "subaccount"}``.
+    ``receipt`` is the provider's view of the charge:
+    ``{"amount" (paid), "fee", "subaccount"}``.
     """
     from ledger.models import Account
     from ledger.services import Line
@@ -661,18 +669,29 @@ def receipt_lines(loan, amount, *, channel, receipt=None):
         return [Line(account=bank, debit=amount, description=label)]
 
     receipt = receipt or {}
-    fee = Decimal(str(receipt.get("fee") or 0)).quantize(Decimal("0.01"))
-    if fee < ZERO or fee >= amount:
+    cent = Decimal("0.01")
+    # What the member paid in all. Unknown (dev key) means no surcharge.
+    paid = Decimal(str(receipt.get("amount") or amount)).quantize(cent)
+    if paid < amount:
+        paid = amount
+    fee = Decimal(str(receipt.get("fee") or 0)).quantize(cent)
+    if fee < ZERO or fee >= paid:
         fee = ZERO
     landed = (bank if receipt.get("subaccount") else
               _account(coop, "1020", "Disbursement Wallet",
                        Account.Kind.ASSET))
-    lines = [Line(account=landed, debit=amount - fee, description=label)]
-    if fee > ZERO:
-        lines.append(Line(
-            account=_account(coop, "5000", "Payment Charges",
-                             Account.Kind.EXPENSE),
-            debit=fee, description=f"Paystack fee on loan {loan.id} repayment"))
+    lines = [Line(account=landed, debit=paid - fee, description=label)]
+    # Paystack's fee less what the member paid towards it.
+    charges = fee - (paid - amount)
+    if charges:
+        account = _account(coop, "5000", "Payment Charges",
+                           Account.Kind.EXPENSE)
+        lines.append(
+            Line(account=account, debit=charges,
+                 description=f"Paystack fee on loan {loan.id} repayment")
+            if charges > ZERO else
+            Line(account=account, credit=-charges,
+                 description=f"Paystack fee paid by member, loan {loan.id}"))
     return lines
 
 

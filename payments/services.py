@@ -764,10 +764,14 @@ def initialize_loan_payment(repayment, *, email, callback_url=None):
         )
         subaccount = account.subaccount_code if account else None
 
+    from payments.fees import gross_up
+
     provider = get_provider(Provider.PAYSTACK)
+    # The member pays Paystack's fee on top, so the society receives the
+    # whole repayment (see payments.fees).
     return provider.initialize_transaction(
         email=email,
-        amount=repayment.amount,
+        amount=gross_up(repayment.amount),
         reference=repayment.psp_reference,
         subaccount_code=subaccount,
         callback_url=callback_url or (settings.PAYSTACK_CALLBACK_URL or None),
@@ -1192,6 +1196,7 @@ def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
         data = (payment.payload or {}).get("data") or {}
         sub = data.get("subaccount")
         receipt = {
+            "amount": Decimal(str(data.get("amount") or 0)) / Decimal("100"),
             "fee": Decimal(str(data.get("fees") or 0)) / Decimal("100"),
             "subaccount": bool(sub.get("subaccount_code")
                                if isinstance(sub, dict) else sub),

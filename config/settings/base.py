@@ -158,6 +158,15 @@ PAYSTACK_USE_SUBACCOUNT = (
 # Platform revenue comes from subscriptions (see Plan/Subscription/Invoice), not
 # from a cut of members' contributions. Confirm the semantics against Paystack's
 # current documentation before setting this to anything else.
+# Paystack's processing fee, passed to the member on loan repayments so the
+# society receives the whole repayment (payments/fees.py). Defaults are
+# Paystack's published local card pricing; override if Paystack changes it.
+PAYSTACK_FEE_PERCENT = os.environ.get('PAYSTACK_FEE_PERCENT', '1.5')
+PAYSTACK_FEE_FLAT = os.environ.get('PAYSTACK_FEE_FLAT', '100')
+PAYSTACK_FEE_FLAT_WAIVED_BELOW = os.environ.get(
+    'PAYSTACK_FEE_FLAT_WAIVED_BELOW', '2500')
+PAYSTACK_FEE_CAP = os.environ.get('PAYSTACK_FEE_CAP', '2000')
+
 PAYSTACK_SUBACCOUNT_PERCENTAGE = float(
     os.environ.get('PAYSTACK_SUBACCOUNT_PERCENTAGE', '0')
 )
