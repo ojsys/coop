@@ -53,9 +53,13 @@ def _notify_disbursed(loan):
     from communications.models import Notification
     from communications.services import notify_member
 
+    fee_note = (
+        f" You receive {_money(loan.amount_to_disburse)} after the "
+        f"{_money(loan.application_fee)} application fee."
+        if loan.application_fee > ZERO else "")
     body = (
         f"Your {loan.product.name} of {_money(loan.principal)} has been "
-        f"disbursed. Total repayable is {_money(loan.total_repayable)} over "
+        f"disbursed.{fee_note} Total repayable is {_money(loan.total_repayable)} over "
         f"{loan.term_months} month(s) at {_money(loan.monthly_instalment)} a "
         f"month.\n\nHow to repay: pay online with Paystack from the app, or by "
         f"direct transfer to your society. {_coop_bank_line(loan)}"
@@ -221,9 +225,51 @@ def build_schedule(loan):
 
 
 @transaction.atomic
+def _fee_lines(loan):
+    """The application fee's ledger lines, booked with the disbursement.
+
+        debit  1200 Loans Receivable    fee   (the member owes it)
+        credit 4110 Loan Fee Income     fee   (earned when the loan is paid out)
+
+    Together with the cash/wallet leg for ``amount_to_disburse`` this makes the
+    receivable the full principal while only principal − fee leaves the
+    society. Empty when the loan carries no fee.
+    """
+    from ledger.models import Account
+    from ledger.services import Line
+
+    if loan.application_fee <= ZERO:
+        return []
+    coop = loan.cooperative
+    receivable = _account(coop, "1200", "Loans Receivable",
+                          Account.Kind.ASSET)
+    fee_income = _account(coop, "4110", "Loan Fee Income",
+                          Account.Kind.INCOME)
+    return [
+        Line(account=receivable, debit=loan.application_fee,
+             membership=loan.membership,
+             description=f"Loan {loan.id} application fee"),
+        Line(account=fee_income, credit=loan.application_fee,
+             description=f"Loan {loan.id} application fee"),
+    ]
+
+
+def _check_fee(loan):
+    if loan.application_fee >= loan.principal:
+        raise LoanError(
+            f"The application fee ({_money(loan.application_fee)}) is not less "
+            f"than the loan ({_money(loan.principal)}), so there is nothing "
+            f"to pay out.")
+
+
 def disburse_loan(loan, *, actor=None, from_account_code="1000"):
     """Pay out an approved loan: book the principal as a receivable and out of
     cash, build the reducing-balance schedule, and notify the member.
+
+    The application fee is deducted here: only ``amount_to_disburse`` leaves
+    cash, the fee is booked to income, and the receivable is the full
+    principal (see ``_fee_lines``). All in one journal, so reversing the
+    disbursement reverses the fee with it.
 
     Interest is *not* recognised here — on a reducing-balance loan it is earned
     over the life of the loan, so it is booked to income on each repayment."""
@@ -233,20 +279,23 @@ def disburse_loan(loan, *, actor=None, from_account_code="1000"):
 
     if loan.status != Loan.Status.APPROVED:
         raise LoanError("Only an approved loan can be disbursed.")
+    _check_fee(loan)
 
     coop = loan.cooperative
     receivable = _account(coop, "1200", "Loans Receivable",
                           Account.Kind.ASSET)
     cash = Account.all_objects.get(cooperative=coop, code=from_account_code)
+    paid_out = loan.amount_to_disburse
 
     journal = post_journal(
         cooperative=coop, reference=f"LOAN-{loan.id}-DISB",
         lines=[
-            Line(account=receivable, debit=loan.principal,
+            Line(account=receivable, debit=paid_out,
                  membership=loan.membership,
                  description=f"Loan {loan.id} disbursed"),
-            Line(account=cash, credit=loan.principal,
+            Line(account=cash, credit=paid_out,
                  description=f"Loan {loan.id} principal out"),
+            *_fee_lines(loan),
         ],
         memo=f"Loan {loan.id} disbursement", created_by=actor)
 
@@ -519,11 +568,16 @@ def disburse_loan_electronically(loan, *, actor=None):
             "the member to re-pick their bank from the list."
         )
 
+    _check_fee(loan)
+
     receivable = _account(loan.cooperative, "1200", "Loans Receivable",
                           Account.Kind.ASSET)
+    # Only principal − fee is transferred; the fee rides in the payout's own
+    # journal so a failed transfer reverses it along with the money.
     payout = send_payout(
         cooperative=loan.cooperative,
-        amount=loan.principal,
+        amount=loan.amount_to_disburse,
+        extra_lines=_fee_lines(loan),
         debit_account=receivable,
         kind=Payout.Kind.LOAN,
         object_id=loan.id,

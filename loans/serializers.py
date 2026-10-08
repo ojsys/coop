@@ -9,7 +9,24 @@ class LoanProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = LoanProduct
         fields = ["id", "name", "interest_rate", "max_amount",
-                  "max_term_months", "active", "created_at"]
+                  "max_term_months", "application_fee_percent",
+                  "application_fee_flat", "active", "created_at"]
+
+    def validate(self, attrs):
+        def current(field):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, 0) or 0
+
+        if current("application_fee_percent") < 0 or \
+                current("application_fee_flat") < 0:
+            raise serializers.ValidationError(
+                "An application fee cannot be negative.")
+        if current("application_fee_percent") >= 100:
+            raise serializers.ValidationError({
+                "application_fee_percent": "A fee of 100% or more would leave "
+                                           "the member nothing to receive."})
+        return attrs
 
 
 class LoanRepaymentSerializer(serializers.ModelSerializer):
@@ -102,6 +119,8 @@ class LoanSerializer(serializers.ModelSerializer):
     destination_summary = serializers.CharField(source="describe_destination",
                                                 read_only=True)
     destination_is_payable = serializers.BooleanField(read_only=True)
+    amount_to_disburse = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True)
 
     class Meta:
         model = Loan
@@ -110,6 +129,9 @@ class LoanSerializer(serializers.ModelSerializer):
                   "member_bank_code", "member_bank_account_no",
                   "member_share_capital",
                   "member_photo", "product", "product_name", "principal",
+                  # Deducted at disbursement: the member receives
+                  # amount_to_disburse and repays the full principal.
+                  "application_fee", "amount_to_disburse",
                   "interest_rate", "term_months", "purpose", "status",
                   "status_display", "interest", "total_repayable", "outstanding",
                   "repaid_amount", "monthly_instalment", "disbursed_at",
@@ -123,7 +145,8 @@ class LoanSerializer(serializers.ModelSerializer):
                   "destination_is_payable", "created_at"]
         # The destination is never client-supplied: accepting one would let an
         # applicant name the account their own loan is paid into.
-        read_only_fields = ["status", "interest_rate", "disbursed_at",
+        read_only_fields = ["status", "interest_rate", "application_fee",
+                            "disbursed_at",
                             "destination_bank_name", "destination_bank_code",
                             "destination_account_no"]
 
@@ -157,10 +180,29 @@ class LoanSerializer(serializers.ModelSerializer):
             "account_no": coop.bank_account_no,
         }
 
+    def validate(self, attrs):
+        """The application fee must leave the member something to receive."""
+        product = attrs.get("product") or getattr(self.instance, "product", None)
+        principal = attrs.get("principal") or getattr(self.instance,
+                                                      "principal", None)
+        if product is not None and principal is not None:
+            fee = product.application_fee_for(principal)
+            if fee >= principal:
+                raise serializers.ValidationError({
+                    "principal": f"The {product.name} application fee is "
+                                 f"{fee:,.2f}, which is not less than the "
+                                 f"amount requested. Apply for more."})
+        return attrs
+
     def create(self, validated_data):
         # Snapshot the product's interest rate onto the loan at application.
         validated_data.setdefault("interest_rate",
                                   validated_data["product"].interest_rate)
+        # And its application fee, so the applicant is held to the fee they
+        # were shown even if the product's fee changes before approval.
+        validated_data["application_fee"] = (
+            validated_data["product"].application_fee_for(
+                validated_data["principal"]))
         loan = super().create(validated_data)
 
         # And snapshot where the money will go. Done here rather than in each

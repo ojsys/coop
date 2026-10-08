@@ -9,6 +9,7 @@ Idempotent — safe to run repeatedly and safe to run after ``seed_demo``:
 """
 from __future__ import annotations
 
+import importlib
 from datetime import timedelta
 from decimal import Decimal
 
@@ -43,6 +44,11 @@ _PLAN_FEATURES = {
 }
 
 
+# The same promises platform_admin migration 0028 fills in.
+_PLAN_PROMISES = importlib.import_module(
+    "platform_admin.migrations.0028_plan_service_promises").PROMISES
+
+
 def seed_platform_data(stdout=None, style=None):
     """Populate the platform-ops tables. Returns a short summary string."""
     today = timezone.now().date()
@@ -69,6 +75,9 @@ def seed_platform_data(stdout=None, style=None):
         if not plan.features:
             plan.features = _PLAN_FEATURES[name]
             plan.save(update_fields=["features", "updated_at"])
+        if not plan.extras:
+            plan.extras = "\n".join(_PLAN_PROMISES[name])
+            plan.save(update_fields=["extras", "updated_at"])
         # Demo subscriptions are keyed by the cooperative's size label; the
         # first plan per label wins, so Large maps to Professional.
         plans.setdefault(tier, plan)

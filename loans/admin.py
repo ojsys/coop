@@ -124,7 +124,10 @@ class LoanAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     ordering = ("-created_at",)
     autocomplete_fields = ("cooperative", "membership", "product", "decided_by")
     list_select_related = ("membership", "product", "cooperative")
-    readonly_fields = ("decided_by", "decided_at", "disbursed_at", "interest",
+    # application_fee is captured at application and booked at disbursement;
+    # editing it here would make the loan disagree with its journal.
+    readonly_fields = ("decided_by", "decided_at", "disbursed_at",
+                       "application_fee", "interest",
                        "total_repayable", "repaid_amount", "outstanding",
                        "monthly_instalment", "created_at", "updated_at")
     inlines = (RepaymentInstalmentInline, LoanRepaymentInline)

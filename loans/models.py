@@ -24,6 +24,15 @@ class LoanProduct(TenantScopedModel, TimeStampedModel):
                   "evenly across the term. Members repay a fixed amount monthly.")
     max_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     max_term_months = models.PositiveIntegerField(default=12)
+    # The loan application (admin) fee. Either or both may be set; the fee is
+    # flat + percent of the amount borrowed. It is *deducted at disbursement*:
+    # the member owes and repays the full amount, and receives it less the fee.
+    application_fee_percent = models.DecimalField(
+        max_digits=5, decimal_places=2, default=0,
+        help_text="Application fee as a % of the amount borrowed.")
+    application_fee_flat = models.DecimalField(
+        max_digits=14, decimal_places=2, default=0,
+        help_text="Fixed application fee, added to any percentage fee.")
     active = models.BooleanField(default=True)
 
     class Meta:
@@ -31,6 +40,13 @@ class LoanProduct(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return self.name
+
+    def application_fee_for(self, principal) -> Decimal:
+        """The fee on a loan of ``principal``, rounded to kobo."""
+        principal = Decimal(str(principal))
+        fee = (self.application_fee_flat
+               + principal * self.application_fee_percent / Decimal("100"))
+        return fee.quantize(Decimal("0.01"))
 
 
 class Loan(TenantScopedModel, TimeStampedModel):
@@ -46,6 +62,11 @@ class Loan(TenantScopedModel, TimeStampedModel):
     product = models.ForeignKey(
         LoanProduct, on_delete=models.PROTECT, related_name="loans")
     principal = models.DecimalField(max_digits=14, decimal_places=2)
+    # Captured from the product at application, like the interest rate, so the
+    # applicant is held to the fee they were shown. Deducted at disbursement:
+    # the member receives principal − fee and repays the full principal.
+    application_fee = models.DecimalField(max_digits=14, decimal_places=2,
+                                          default=0)
     interest_rate = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     term_months = models.PositiveIntegerField(default=12)
     purpose = models.CharField(max_length=255, blank=True)
@@ -100,6 +121,11 @@ class Loan(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"Loan {self.id} · {self.membership.member_no}"
+
+    @property
+    def amount_to_disburse(self) -> Decimal:
+        """What the member actually receives: the principal less the fee."""
+        return self.principal - self.application_fee
 
     @property
     def destination_is_payable(self) -> bool:

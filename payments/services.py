@@ -254,9 +254,13 @@ def withdraw_wallet(cooperative, *, amount, actor=None, reason=""):
 def send_payout(*, cooperative, amount, debit_account, kind, object_id=None,
                 destination_bank_name="", destination_bank_code="",
                 destination_account_no="", account_name="", reason="",
-                actor=None, membership=None,
+                actor=None, membership=None, extra_lines=None,
                 provider_name=Provider.PAYSTACK):
     """Send money out of the society's disbursement wallet. Returns the Payout.
+
+    ``extra_lines`` are balanced ledger lines posted in the *same* journal as
+    the payout — e.g. a loan's application fee, which is booked with the
+    disbursement so that reversing a failed payout reverses the fee too.
 
     Every outbound payment goes through here — a loan disbursement, a society
     withdrawing its own wallet, later a savings payout — so the wallet check,
@@ -355,6 +359,7 @@ def send_payout(*, cooperative, amount, debit_account, kind, object_id=None,
                  description=reason or ""),
             Line(account=wallet, credit=amount,
                  description=f"Payout {reference}"),
+            *(extra_lines or []),
         ],
     )
 

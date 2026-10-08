@@ -152,10 +152,11 @@ def loan_health(cooperative=None, *, unconfirmed_after=UNCONFIRMED_AFTER) -> dic
                            "cannot be paid electronically.")
                     fix = ("Ask the member to re-pick their bank, then pay it "
                            "— or disburse it in cash.")
-                elif wallet_for(loan.cooperative) < loan.principal:
+                elif wallet_for(loan.cooperative) < loan.amount_to_disburse:
+                    # Only principal − application fee leaves the wallet.
                     why = (f"The disbursement wallet holds "
                            f"{wallet_for(loan.cooperative):,.2f}, less than the "
-                           f"{loan.principal:,.2f} principal.")
+                           f"{loan.amount_to_disburse:,.2f} to be paid out.")
                     fix = "Fund the wallet, then pay it."
                 else:
                     why = "Ready to pay — bank details and wallet are both fine."
