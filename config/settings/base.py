@@ -376,3 +376,9 @@ LOGGING = {
         },
     },
 }
+
+# Demo seeders (seed_demo, seed_platform) fill the database with fictional
+# cooperatives, members, invoices and users. Allowed everywhere except
+# production, where config/settings/prod.py turns it off; the commands refuse
+# to run without --i-know-this-is-production there.
+DEMO_SEEDING_ALLOWED = True

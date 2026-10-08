@@ -18,6 +18,7 @@ from accounts.models import Membership, Role, User
 from contributions.models import ContributionType
 from contributions.services import record_contribution
 from core.context import use_tenant
+from core.demo_guard import add_override, refuse_in_production
 from ledger.models import Account
 from tenants.models import Cooperative
 from tenants.services import provision_cooperative
@@ -103,7 +104,11 @@ def seed_member_experience(coop):
 class Command(BaseCommand):
     help = "Seed a demo cooperative with members and contributions."
 
+    def add_arguments(self, parser):
+        add_override(parser)
+
     def handle(self, *args, **options):
+        refuse_in_production(options, "seed_demo")
         if Cooperative.objects.filter(slug="imole").exists():
             self.stdout.write(self.style.WARNING("Demo already seeded."))
             return

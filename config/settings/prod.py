@@ -45,6 +45,9 @@ SECRET_KEY = _require('DJANGO_SECRET_KEY')
 
 DEBUG = False
 
+# Never fill the live database with fictional cooperatives by accident.
+DEMO_SEEDING_ALLOWED = False
+
 # Comma-separated list, e.g. "mycooperativeos.com,www.mycooperativeos.com"
 ALLOWED_HOSTS = _csv('DJANGO_ALLOWED_HOSTS') or None
 if not ALLOWED_HOSTS:

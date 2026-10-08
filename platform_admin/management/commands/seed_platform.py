@@ -16,6 +16,7 @@ from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from accounts.models import User
+from core.demo_guard import add_override, refuse_in_production
 from platform_admin.models import (
     Domain, Incident, Invoice, NotificationTemplate, OnboardingItem, Plan,
     PlatformProfile, PlatformTeamMember, ProviderCheck, ProviderStatus,
@@ -277,7 +278,11 @@ def seed_platform_data(stdout=None, style=None):
 class Command(BaseCommand):
     help = "Seed Startup Ripple platform-ops demo data (plans, billing, etc.)."
 
+    def add_arguments(self, parser):
+        add_override(parser)
+
     def handle(self, *args, **options):
+        refuse_in_production(options, "seed_platform")
         summary = seed_platform_data()
         self.stdout.write(self.style.SUCCESS(
             f"Seeded platform-ops demo data: {summary}"
