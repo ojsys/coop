@@ -842,7 +842,9 @@ def check_loan_payment(repayment):
             f"this repayment is for. Nothing was posted; check the payment in "
             f"the Paystack dashboard.", provider_status="partial")
 
-    return confirm_loan_repayment(repayment)
+    # The detail says what fee Paystack took and where the money settled, so
+    # the repayment is booked into the wallet (or bank) for the right amount.
+    return confirm_loan_repayment(repayment, receipt=detail)
 
 
 def recheck_settled_repayment(repayment, *, actor=None):
@@ -1183,7 +1185,18 @@ def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
             f"Loan repayment amount mismatch: settled {payment.amount} vs "
             f"expected {repayment.amount}.")
     else:
-        settled = confirm_loan_repayment(repayment)
+        # The webhook carries the same fee and split the verify call reports,
+        # so the money is booked where it landed without asking again.
+        from decimal import Decimal
+
+        data = (payment.payload or {}).get("data") or {}
+        sub = data.get("subaccount")
+        receipt = {
+            "fee": Decimal(str(data.get("fees") or 0)) / Decimal("100"),
+            "subaccount": bool(sub.get("subaccount_code")
+                               if isinstance(sub, dict) else sub),
+        }
+        settled = confirm_loan_repayment(repayment, receipt=receipt)
         if settled is None:
             # The loan was already paid off by other repayments, so the money
             # arrived with nothing to apply it to: an operator must refund it.

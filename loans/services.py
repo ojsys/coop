@@ -627,27 +627,76 @@ def _allocate(loan, amount) -> Decimal:
     return interest_total
 
 
+def receipt_lines(loan, amount, *, channel, receipt=None):
+    """Where a repayment's money actually arrived, as ledger debit lines.
+
+    Booked to the place the money is, because that is what the society can
+    then use:
+
+    * **cash** — the till (1000).
+    * **transfer** — the member paid the society's own account: Bank (1010).
+    * **psp** (Paystack) — the platform's Paystack balance, which is exactly
+      what the disbursement wallet (1020) represents, so a repayment is lendable
+      again at once. Paystack deducts its fee before the money lands, so the
+      wallet gets the net and the fee goes to Payment Charges (5000) — the same
+      treatment as a wallet top-up. When the charge was split to the society's
+      own subaccount the money went to its bank instead (1010).
+
+    Previously every repayment debited Cash, so an online repayment never
+    reached the wallet the next loan is paid from.
+
+    ``receipt`` is the provider's view of the charge: ``{"fee", "subaccount"}``.
+    """
+    from ledger.models import Account
+    from ledger.services import Line
+
+    coop = loan.cooperative
+    amount = Decimal(str(amount))
+    label = f"Loan {loan.id} repayment"
+    if channel == "cash":
+        return [Line(account=_account(coop, "1000", "Cash", Account.Kind.ASSET),
+                     debit=amount, description=label)]
+    bank = _account(coop, "1010", "Bank / PSP Settlement", Account.Kind.ASSET)
+    if channel != "psp":
+        return [Line(account=bank, debit=amount, description=label)]
+
+    receipt = receipt or {}
+    fee = Decimal(str(receipt.get("fee") or 0)).quantize(Decimal("0.01"))
+    if fee < ZERO or fee >= amount:
+        fee = ZERO
+    landed = (bank if receipt.get("subaccount") else
+              _account(coop, "1020", "Disbursement Wallet",
+                       Account.Kind.ASSET))
+    lines = [Line(account=landed, debit=amount - fee, description=label)]
+    if fee > ZERO:
+        lines.append(Line(
+            account=_account(coop, "5000", "Payment Charges",
+                             Account.Kind.EXPENSE),
+            debit=fee, description=f"Paystack fee on loan {loan.id} repayment"))
+    return lines
+
+
 def _post_repayment(loan, amount, *, actor, channel, psp_reference, status,
-                    note=""):
+                    note="", receipt=None):
     """Post the ledger entries for a settled repayment and record it.
 
-    Cash comes in; the interest portion is booked to income and the principal
-    portion reduces the receivable (reducing-balance recognition)."""
+    The money is debited where it arrived (see ``receipt_lines``); the interest
+    portion is booked to income and the principal portion reduces the
+    receivable (reducing-balance recognition). The member is credited the full
+    amount whatever fee the provider took."""
     from ledger.models import Account
     from ledger.services import Line, post_journal
     from loans.models import LoanRepayment
 
     coop = loan.cooperative
     receivable = Account.all_objects.get(cooperative=coop, code="1200")
-    cash = Account.all_objects.get(cooperative=coop, code="1000")
     interest_income = _account(coop, "4100", "Loan Interest Income",
                                Account.Kind.INCOME)
 
     interest_part = _allocate(loan, amount)
     principal_part = Decimal(str(amount)) - interest_part
 
-    lines = [Line(account=cash, debit=amount,
-                  description=f"Loan {loan.id} repayment")]
+    lines = receipt_lines(loan, amount, channel=channel, receipt=receipt)
     if principal_part > ZERO:
         lines.append(Line(account=receivable, credit=principal_part,
                           membership=loan.membership,
@@ -719,9 +768,25 @@ def initiate_loan_repayment(loan, *, amount, reference, channel="psp"):
 
 
 @transaction.atomic
-def confirm_loan_repayment(repayment, *, actor=None):
+def _provider_receipt(reference):
+    """Ask Paystack for the fee and split on a charge. Best effort: with no
+    answer the repayment is still booked, to the wallet with no fee."""
+    from payments.models import Provider
+    from payments.providers import PaymentInitError, get_provider
+
+    try:
+        return get_provider(Provider.PAYSTACK).fetch_transaction(reference)
+    except PaymentInitError:
+        return None
+
+
+def confirm_loan_repayment(repayment, *, actor=None, receipt=None):
     """Settle a PENDING repayment once its payment is verified: posts the ledger,
-    allocates to the schedule and notifies the member. Idempotent."""
+    allocates to the schedule and notifies the member. Idempotent.
+
+    ``receipt`` is the provider's account of an online payment (fee, and
+    whether it was split to a subaccount); callers that already asked pass it,
+    otherwise it is fetched here."""
     from loans.models import LoanRepayment
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         return repayment
@@ -754,10 +819,14 @@ def confirm_loan_repayment(repayment, *, actor=None):
         repayment.delete()
         return None
 
+    if (repayment.channel == LoanRepayment.Channel.PSP and receipt is None
+            and repayment.psp_reference):
+        receipt = _provider_receipt(repayment.psp_reference)
+
     settled = _post_repayment(
         loan, amount, actor=actor, channel=repayment.channel,
         psp_reference=repayment.psp_reference, note=repayment.note,
-        status=LoanRepayment.Status.CONFIRMED)
+        status=LoanRepayment.Status.CONFIRMED, receipt=receipt)
     # Replace the pending placeholder with the settled record.
     repayment.delete()
     return settled

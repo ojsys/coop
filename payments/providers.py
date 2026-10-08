@@ -106,8 +106,8 @@ class BaseProvider:
         settled amount, not the amount we asked for.
 
         Returns ``{"success": bool, "status": str, "amount": Decimal,
-        "fee": Decimal}`` in major units, or ``None`` when the reference is
-        unknown. ``status`` is the provider's own word for the charge
+        "fee": Decimal, "subaccount": bool}`` in major units, or ``None`` when
+        the reference is unknown. ``status`` is the provider's own word for the charge
         ("success", "failed", "abandoned", ...), so a caller can tell a charge
         that definitively failed from one that simply has not completed yet.
         """
@@ -340,7 +340,7 @@ class PaystackProvider(BaseProvider):
         secret = settings.PAYSTACK_SECRET_KEY
         if not secret or secret.startswith("sk_test_dev"):
             return {"success": True, "status": "success", "amount": None,
-                    "fee": Decimal("0.00")}
+                    "fee": Decimal("0.00"), "subaccount": False}
 
         try:
             resp = requests.get(
@@ -364,6 +364,13 @@ class PaystackProvider(BaseProvider):
             # Paystack reports both in kobo.
             "amount": Decimal(str(data.get("amount", 0))) / hundred,
             "fee": Decimal(str(data.get("fees") or 0)) / hundred,
+            # Whether the charge was split to a society's own subaccount — the
+            # money then settles to that society's bank, not the platform
+            # balance the disbursement wallet represents.
+            "subaccount": bool((data.get("subaccount") or {})
+                               .get("subaccount_code")
+                               if isinstance(data.get("subaccount"), dict)
+                               else data.get("subaccount")),
         }
 
 
