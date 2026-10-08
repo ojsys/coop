@@ -33,8 +33,8 @@ from loans.views import (
     LoanProductViewSet, LoanRepaymentViewSet, LoanViewSet,
 )
 from payments.views import (
-    FlutterwaveWebhookView, PaymentEventViewSet, PaystackWebhookView,
-    PayoutViewSet, ProviderAccountViewSet, WalletViewSet,
+    FeeQuoteView, FlutterwaveWebhookView, PaymentEventViewSet,
+    PaystackWebhookView, PayoutViewSet, ProviderAccountViewSet, WalletViewSet,
 )
 from platform_admin.public_views import InvoicePayView, InvoiceVerifyView
 from platform_admin.views import (
@@ -175,6 +175,7 @@ urlpatterns = [
     path("public/invoice/<str:pay_token>/", InvoicePayView.as_view(),
          name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
+    path("fee-quote/", FeeQuoteView.as_view(), name="fee-quote"),
     path("webhooks/paystack/", PaystackWebhookView.as_view(),
          name="webhook-paystack"),
     path("webhooks/flutterwave/", FlutterwaveWebhookView.as_view(),

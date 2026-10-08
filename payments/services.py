@@ -22,6 +22,7 @@ from django.conf import settings
 from contributions.models import Contribution
 from contributions.services import confirm_contribution
 from payments.models import PaymentEvent, Provider, ProviderAccount
+from payments.fees import accepts_paid_amount, gross_up
 from payments.providers import (
     NormalizedEvent, PaymentInitError, WebhookVerificationError, get_provider,
 )
@@ -737,10 +738,14 @@ def initialize_payment(contribution, *, email, callback_url=None):
         )
         subaccount = account.subaccount_code if account else None
 
+    from payments.fees import gross_up
+
     provider = get_provider(Provider.PAYSTACK)
+    # The member pays Paystack's fee on top of the contribution (see
+    # payments.fees), so the society receives the whole contribution.
     return provider.initialize_transaction(
         email=email,
-        amount=contribution.amount,
+        amount=gross_up(contribution.amount),
         reference=contribution.psp_reference,
         subaccount_code=subaccount,
         callback_url=callback_url or (settings.PAYSTACK_CALLBACK_URL or None),
@@ -932,9 +937,16 @@ def verify_payment(cooperative, reference):
     if contribution.status == Contribution.Status.CONFIRMED:
         return contribution
 
-    provider = get_provider(Provider.PAYSTACK)
-    if provider.verify_transaction(reference):
-        settled = confirm_contribution(contribution)
+    from payments.fees import accepts_paid_amount as _accepts
+
+    detail = get_provider(Provider.PAYSTACK).fetch_transaction(reference)
+    if detail and detail.get("success"):
+        paid = detail.get("amount")
+        if paid is not None and not _accepts(contribution.amount, paid):
+            # Short or altered: leave it pending for a person, as the webhook
+            # does, rather than crediting the member for money not received.
+            return contribution
+        settled = confirm_contribution(contribution, receipt=detail)
         # Recorded here rather than inside confirm_contribution: reconcile_event
         # calls that too, and hooking it there would make the webhook path
         # create a second event for the settlement it is already reconciling.
@@ -1089,15 +1101,19 @@ def reconcile_event(payment: PaymentEvent) -> PaymentEvent:
     elif contribution.status == Contribution.Status.REVERSED:
         payment.status = PaymentEvent.Status.UNMATCHED
         payment.note = "Matching contribution was reversed."
-    elif payment.amount != contribution.amount:
+    elif not accepts_paid_amount(contribution.amount, payment.amount):
+        # The plain amount or the amount plus Paystack's fee both settle it;
+        # anything else is a partial or altered payment for a person to check.
         payment.status = PaymentEvent.Status.PARTIAL
         payment.matched_contribution = contribution
         payment.note = (
             f"Amount mismatch: settled {payment.amount} vs "
-            f"expected {contribution.amount}."
+            f"expected {contribution.amount} "
+            f"(or {gross_up(contribution.amount)} with the Paystack fee)."
         )
     else:
-        confirm_contribution(contribution)
+        confirm_contribution(contribution,
+                             receipt=_webhook_receipt(payment))
         payment.status = PaymentEvent.Status.MATCHED
         payment.matched_contribution = contribution
         payment.note = ""
@@ -1151,6 +1167,20 @@ def _reconcile_wallet_topup(payment: PaymentEvent) -> bool:
     return True
 
 
+def _webhook_receipt(payment: PaymentEvent) -> dict:
+    """The charge as the webhook reports it: paid, fee, and subaccount split."""
+    from decimal import Decimal
+
+    data = (payment.payload or {}).get("data") or {}
+    sub = data.get("subaccount")
+    return {
+        "amount": Decimal(str(data.get("amount") or 0)) / Decimal("100"),
+        "fee": Decimal(str(data.get("fees") or 0)) / Decimal("100"),
+        "subaccount": bool(sub.get("subaccount_code")
+                           if isinstance(sub, dict) else sub),
+    }
+
+
 def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
     """Settle an online loan repayment from its ``charge.success`` webhook.
 
@@ -1183,7 +1213,9 @@ def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
         payment.status = PaymentEvent.Status.UNMATCHED
         payment.note = ("Payment arrived for a loan repayment that had been "
                         "reversed; record it again if it is genuine.")
-    elif payment.amount != repayment.amount:
+    elif not accepts_paid_amount(repayment.amount, payment.amount):
+        # Since the member pays Paystack's fee on top, a correct payment is
+        # the repayment *plus* the fee; an exact match alone flagged every one.
         payment.status = PaymentEvent.Status.PARTIAL
         payment.note = (
             f"Loan repayment amount mismatch: settled {payment.amount} vs "
@@ -1191,17 +1223,8 @@ def _reconcile_loan_repayment(payment: PaymentEvent) -> bool:
     else:
         # The webhook carries the same fee and split the verify call reports,
         # so the money is booked where it landed without asking again.
-        from decimal import Decimal
-
-        data = (payment.payload or {}).get("data") or {}
-        sub = data.get("subaccount")
-        receipt = {
-            "amount": Decimal(str(data.get("amount") or 0)) / Decimal("100"),
-            "fee": Decimal(str(data.get("fees") or 0)) / Decimal("100"),
-            "subaccount": bool(sub.get("subaccount_code")
-                               if isinstance(sub, dict) else sub),
-        }
-        settled = confirm_loan_repayment(repayment, receipt=receipt)
+        settled = confirm_loan_repayment(repayment,
+                                         receipt=_webhook_receipt(payment))
         if settled is None:
             # The loan was already paid off by other repayments, so the money
             # arrived with nothing to apply it to: an operator must refund it.

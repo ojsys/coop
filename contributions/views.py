@@ -145,7 +145,14 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         # opens with the public key.
         payload["paystack_public_key"] = dj_settings.PAYSTACK_PUBLIC_KEY or None
         payload["payer_email"] = membership.user.email
-        payload["amount_kobo"] = int(contribution.amount * 100)
+        # The member pays Paystack's fee on top, so the inline checkout must
+        # charge the same grossed-up total the server-side checkout uses.
+        from payments.fees import gross_up
+
+        total = gross_up(contribution.amount)
+        payload["fee"] = str(total - contribution.amount)
+        payload["total"] = str(total)
+        payload["amount_kobo"] = int(total * 100)
         # No keys configured at all → the flow is a local test stand-in.
         payload["payment_simulated"] = (
             dj_settings.PAYSTACK_SECRET_KEY.startswith("sk_test_dev")

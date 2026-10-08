@@ -370,3 +370,31 @@ class WalletViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
             "balance": str(wallet_balance(cooperative)),
             "payout": PayoutSerializer(payout).data,
         }, status=201)
+
+
+class FeeQuoteView(APIView):
+    """`GET /fee-quote/?amount=` — what paying ``amount`` online costs.
+
+    The member pays Paystack's fee on top of a contribution or loan repayment,
+    so the society receives the whole amount. Shown before checkout, from the
+    same calculation the checkout uses.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from decimal import Decimal, InvalidOperation
+
+        from payments.fees import gross_up
+
+        try:
+            amount = Decimal(request.query_params.get("amount") or "0")
+        except InvalidOperation:
+            return Response({"detail": "Enter a valid amount."}, status=400)
+        if amount <= 0:
+            return Response({"detail": "Enter an amount above zero."},
+                            status=400)
+        amount = amount.quantize(Decimal("0.01"))
+        total = gross_up(amount)
+        return Response({"amount": str(amount), "fee": str(total - amount),
+                         "total": str(total)})

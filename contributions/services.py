@@ -181,11 +181,18 @@ def initiate_contribution(
 
 
 @transaction.atomic
-def confirm_contribution(contribution, *, recorded_by=None):
+def confirm_contribution(contribution, *, recorded_by=None, receipt=None):
     """Post the ledger journal for a PENDING contribution → CONFIRMED.
 
     Idempotent: confirming an already-confirmed contribution is a no-op, so a
     duplicate webhook can never double-post to the ledger.
+
+    For an online payment, ``receipt`` is the provider's account of it
+    (``{"amount", "fee"}``). The member pays Paystack's fee on top of the
+    contribution, so the settlement account is debited what actually arrived,
+    Paystack's fee less the member's share of it goes to Payment Charges
+    (about nothing), and the member is credited the full contribution. Without
+    a receipt the contribution is booked at its face value, as before.
     """
     from contributions.models import Contribution
 
@@ -196,6 +203,27 @@ def confirm_contribution(contribution, *, recorded_by=None):
 
     coop = contribution.cooperative
     asset = _settlement_account(coop, contribution.channel)
+    received, charges = contribution.amount, Decimal("0.00")
+    if contribution.channel == "psp" and receipt:
+        from payments.fees import split_receipt
+
+        received, charges = split_receipt(contribution.amount, receipt)
+    lines = [Line(account=asset, debit=received,
+                  description=f"{contribution.channel} settlement")]
+    if charges:
+        fees, _ = Account.all_objects.get_or_create(
+            cooperative=coop, code="5000",
+            defaults={"name": "Payment Charges",
+                      "kind": Account.Kind.EXPENSE, "system": True})
+        lines.append(
+            Line(account=fees, debit=charges, description="Paystack fee")
+            if charges > 0 else
+            Line(account=fees, credit=-charges,
+                 description="Paystack fee paid by member"))
+    lines.append(Line(account=contribution.contribution_type.gl_account,
+                      credit=contribution.amount,
+                      membership=contribution.membership,
+                      description=contribution.contribution_type.name))
     journal = post_journal(
         cooperative=coop,
         reference=_reference(),
@@ -203,13 +231,7 @@ def confirm_contribution(contribution, *, recorded_by=None):
         memo=f"{contribution.contribution_type.name} — "
              f"{contribution.membership.member_no}",
         created_by=recorded_by,
-        lines=[
-            Line(account=asset, debit=contribution.amount,
-                 description=f"{contribution.channel} settlement"),
-            Line(account=contribution.contribution_type.gl_account,
-                 credit=contribution.amount, membership=contribution.membership,
-                 description=contribution.contribution_type.name),
-        ],
+        lines=lines,
     )
     contribution.status = Contribution.Status.CONFIRMED
     contribution.journal = journal

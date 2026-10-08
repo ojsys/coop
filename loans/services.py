@@ -668,21 +668,14 @@ def receipt_lines(loan, amount, *, channel, receipt=None):
     if channel != "psp":
         return [Line(account=bank, debit=amount, description=label)]
 
-    receipt = receipt or {}
-    cent = Decimal("0.01")
-    # What the member paid in all. Unknown (dev key) means no surcharge.
-    paid = Decimal(str(receipt.get("amount") or amount)).quantize(cent)
-    if paid < amount:
-        paid = amount
-    fee = Decimal(str(receipt.get("fee") or 0)).quantize(cent)
-    if fee < ZERO or fee >= paid:
-        fee = ZERO
-    landed = (bank if receipt.get("subaccount") else
+    from payments.fees import split_receipt
+
+    received, charges = split_receipt(amount, receipt)
+    landed = (bank if (receipt or {}).get("subaccount") else
               _account(coop, "1020", "Disbursement Wallet",
                        Account.Kind.ASSET))
-    lines = [Line(account=landed, debit=paid - fee, description=label)]
+    lines = [Line(account=landed, debit=received, description=label)]
     # Paystack's fee less what the member paid towards it.
-    charges = fee - (paid - amount)
     if charges:
         account = _account(coop, "5000", "Payment Charges",
                            Account.Kind.EXPENSE)

@@ -72,3 +72,40 @@ def gross_up(amount) -> Decimal:
 def payer_fee(amount) -> Decimal:
     """What the payer adds on top of ``amount`` to cover Paystack's fee."""
     return gross_up(amount) - Decimal(str(amount)).quantize(CENT)
+
+
+def split_receipt(amount, receipt=None) -> tuple[Decimal, Decimal]:
+    """What landed, and the net payment charge, for a payment of ``amount``.
+
+    ``receipt`` is the provider's account of the charge — ``{"amount"`` (what
+    the payer paid in all), ``"fee"`` (what Paystack kept)``}`` — or ``None``
+    when there is none (the dev key), meaning no surcharge and no fee.
+
+    Returns ``(landed, charges)``: ``landed`` is what reached the account;
+    ``charges`` is Paystack's fee less what the payer paid towards it — about
+    zero when the fee was passed on, the whole fee when it was not (a charge
+    made before fees were passed on), negative only if the payer covered more
+    than Paystack took. Together they always equal ``amount``, so the journal
+    balances against the full credit to the member.
+    """
+    amount = Decimal(str(amount)).quantize(CENT)
+    receipt = receipt or {}
+    paid = Decimal(str(receipt.get("amount") or amount)).quantize(CENT)
+    if paid < amount:
+        paid = amount
+    fee = Decimal(str(receipt.get("fee") or 0)).quantize(CENT)
+    if fee < 0 or fee >= paid:
+        fee = Decimal("0.00")
+    return paid - fee, fee - (paid - amount)
+
+
+def accepts_paid_amount(expected, paid) -> bool:
+    """Whether ``paid`` settles a payment of ``expected``.
+
+    Either the plain amount (a checkout opened before fees were passed on) or
+    the amount plus Paystack's fee. Anything else is a partial or tampered
+    payment and is left for a person.
+    """
+    paid = Decimal(str(paid)).quantize(CENT)
+    expected = Decimal(str(expected)).quantize(CENT)
+    return paid in (expected, gross_up(expected))

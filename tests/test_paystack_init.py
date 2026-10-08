@@ -73,7 +73,9 @@ def test_initialize_builds_correct_paystack_request(
     assert captured["url"].endswith("/transaction/initialize")
     assert captured["headers"]["Authorization"] == "Bearer sk_test_LIVEKEY"
     body = captured["json"]
-    assert body["amount"] == 500000            # ₦5,000 → kobo
+    # ₦5,000 plus Paystack's fee (paid by the member) → kobo, so ₦5,000
+    # reaches the society after Paystack takes its cut.
+    assert body["amount"] == 517767
     assert body["reference"] == "OFFLINE-abc123"  # reused for webhook reconciliation
     assert body["subaccount"] == SUBACCOUNT     # settles to the coop's own account
     assert body["email"] == "ada@example.com"
