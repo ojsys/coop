@@ -15,10 +15,19 @@ from dividends.models import DividendAllocation, DividendDeclaration
 
 
 class DividendAllocationInline(TenantScopedTabularInline):
+    """Read-only: an allocation edited here would no longer match the journal
+    that paid it, and a member's statement would disagree with the record."""
+
     model = DividendAllocation
     extra = 0
-    autocomplete_fields = ("membership",)
     fields = ("membership", "share_capital", "amount")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(DividendDeclaration)
@@ -30,9 +39,16 @@ class DividendDeclarationAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     ordering = ("-created_at",)
     autocomplete_fields = ("cooperative", "created_by")
     list_select_related = ("cooperative", "created_by")
-    # Posting is the service's job; the journal is the ledger's record of it.
-    readonly_fields = ("journal", "posted_at", "created_at", "updated_at")
+    # Declaring, posting and reversing are the services' job (through the
+    # console and the approvals queue); every figure here is their record.
+    readonly_fields = ("period_label", "method", "rate", "total_amount",
+                       "status", "journal", "posted_at", "reversal_journal",
+                       "reversed_at", "reversed_by", "reversal_reason",
+                       "created_by", "created_at", "updated_at")
     inlines = (DividendAllocationInline,)
+
+    def has_add_permission(self, request):
+        return False
 
 
 @admin.register(DividendAllocation)
@@ -45,3 +61,9 @@ class DividendAllocationAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     ordering = ("-amount",)
     autocomplete_fields = ("cooperative", "declaration", "membership")
     list_select_related = ("declaration", "membership", "cooperative")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

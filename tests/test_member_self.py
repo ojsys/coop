@@ -122,6 +122,17 @@ def test_member_sees_only_own_dividend(coop):
     m1 = _member(coop, "a@x.co", "M-1", share="60000")
     m2 = _member(coop, "b@x.co", "M-2", share="40000")
     with use_tenant(coop):
+        # A dividend is paid from surplus, so the society needs some earned.
+        from ledger.models import Account
+        from ledger.services import Line, post_journal
+
+        cash = Account.all_objects.get(cooperative=coop, code="1000")
+        income, _ = Account.all_objects.get_or_create(
+            cooperative=coop, code="4100",
+            defaults={"name": "Income", "kind": Account.Kind.INCOME})
+        post_journal(cooperative=coop, reference="EARN", memo="earned",
+                     lines=[Line(account=cash, debit=Decimal("10000")),
+                            Line(account=income, credit=Decimal("10000"))])
         d = declare_dividend(cooperative=coop, total_amount="10000",
                              period_label="FY25")
         post_dividend(d)

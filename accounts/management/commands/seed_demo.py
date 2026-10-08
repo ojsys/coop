@@ -92,7 +92,21 @@ def seed_member_experience(coop):
         approve_loan(loan, actor=officer, approve=True)
         disburse_loan(loan, actor=officer)
 
-        # A posted dividend so the member sees an allocation.
+        # A posted dividend so the member sees an allocation. Dividends are
+        # paid from surplus, so the demo society first earns a year's income.
+        from ledger.services import Line, post_journal
+
+        cash = Account.all_objects.get(cooperative=coop, code="1000")
+        other_income, _ = Account.all_objects.get_or_create(
+            cooperative=coop, code="4200",
+            defaults={"name": "Other Income", "kind": Account.Kind.INCOME,
+                      "system": True})
+        post_journal(cooperative=coop, reference="DEMO-SURPLUS",
+                     memo="Demo: the year's other income",
+                     lines=[Line(account=cash, debit=Decimal("60000")),
+                            Line(account=other_income,
+                                 credit=Decimal("60000"))],
+                     created_by=officer)
         declaration = declare_dividend(
             cooperative=coop, total_amount="50000", period_label="FY2025",
             created_by=officer)

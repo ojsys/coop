@@ -83,6 +83,7 @@ class Notification(TenantScopedModel, TimeStampedModel):
         # Its own kind rather than reusing CONTRIBUTION, which reads
         # "Contribution received" — the opposite of what a payout is.
         WITHDRAWAL = "withdrawal", "Savings withdrawal"
+        DIVIDEND = "dividend", "Dividend"
 
     membership = models.ForeignKey(
         "accounts.Membership", on_delete=models.CASCADE,

@@ -261,8 +261,11 @@ class MemberDividendViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         membership = _membership(self.request)
         if membership is None:
             return DividendAllocation.objects.none()
+        # Posted only. A draft is a proposal a second officer has not approved
+        # and may be deleted; showing it read as money promised.
         return (DividendAllocation.objects
-                .filter(membership=membership)
+                .filter(membership=membership,
+                        declaration__status="posted")
                 .select_related("declaration")
                 .order_by("-declaration__created_at"))
 

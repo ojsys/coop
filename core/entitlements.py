@@ -143,10 +143,15 @@ class RequiresFeatureMixin:
     """
 
     required_feature: str = ""
+    # Writes that correct past use rather than start new use — a reversal, for
+    # instance — and so must work on any plan.
+    ungated_actions: frozenset = frozenset()
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
         if request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        if getattr(self, "action", None) in self.ungated_actions:
             return
         from core.context import get_current_cooperative
 

@@ -28,7 +28,12 @@ def _resolve(cooperative, action, object_id):
             cooperative=cooperative, id=object_id).first()
         if dec is None:
             raise ApprovalError("Dividend declaration not found.")
-        return dec, f"Dividend {dec.period_label} · {dec.total_amount}"
+        if dec.status != DividendDeclaration.Status.DRAFT:
+            raise ApprovalError(
+                f"The {dec.period_label} dividend is "
+                f"{dec.get_status_display().lower()}, not a draft.")
+        return dec, (f"Dividend {dec.period_label} · {dec.total_amount} "
+                     f"across {dec.allocations.count()} members")
     if action == ApprovalRequest.Action.COOP_BANK_UPDATE:
         from tenants.models import BankDetailChange
 
@@ -123,8 +128,13 @@ def _execute(request_obj, actor):
         from loans.services import disburse_loan
         disburse_loan(target, actor=actor)
     elif request_obj.action == ApprovalRequest.Action.DIVIDEND_POST:
-        from dividends.services import post_dividend
-        post_dividend(target, actor=actor)
+        from dividends.services import DividendError, post_dividend
+        try:
+            post_dividend(target, actor=actor)
+        except DividendError as exc:
+            # E.g. the surplus no longer covers it: the approver is told why,
+            # and the request stays pending rather than half-applied.
+            raise ApprovalError(str(exc)) from exc
     elif request_obj.action == ApprovalRequest.Action.COOP_BANK_UPDATE:
         from tenants.services import apply_bank_detail_change
         apply_bank_detail_change(target, actor=actor)
