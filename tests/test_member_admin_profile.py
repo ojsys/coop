@@ -51,6 +51,7 @@ def _form_data(member, **overrides):
         "user": member.user_id,
         "member_no": member.member_no,
         "role": member.role_id or "",
+        "kind": member.kind,
         "status": member.status,
         "full_name": member.user.full_name,
         "phone": member.user.phone,

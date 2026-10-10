@@ -10,7 +10,8 @@ class LoanProductSerializer(serializers.ModelSerializer):
         model = LoanProduct
         fields = ["id", "name", "interest_rate", "max_amount",
                   "max_term_months", "application_fee_percent",
-                  "application_fee_flat", "active", "created_at"]
+                  "application_fee_flat", "open_to_non_members",
+                  "non_member_interest_rate", "active", "created_at"]
 
     def validate(self, attrs):
         def current(field):
@@ -81,6 +82,8 @@ class LoanSerializer(serializers.ModelSerializer):
                                       read_only=True)
     member_name = serializers.CharField(source="membership.user.full_name",
                                         read_only=True)
+    member_kind = serializers.CharField(source="membership.kind",
+                                        read_only=True)
     # Fields an officer needs to confirm before disbursing (who + where to pay).
     member_phone = serializers.CharField(source="membership.user.phone",
                                          read_only=True)
@@ -125,7 +128,7 @@ class LoanSerializer(serializers.ModelSerializer):
     class Meta:
         model = Loan
         fields = ["id", "membership", "member_no", "member_name",
-                  "member_phone", "member_email", "member_bank_name",
+                  "member_kind", "member_phone", "member_email", "member_bank_name",
                   "member_bank_code", "member_bank_account_no",
                   "member_share_capital",
                   "member_photo", "product", "product_name", "principal",
@@ -195,9 +198,18 @@ class LoanSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        # Snapshot the product's interest rate onto the loan at application.
+        product = validated_data["product"]
+        membership = validated_data.get("membership")
+        # Checked here, not in validate(): on the member path the membership is
+        # supplied by the view at save time, so validate() cannot see it.
+        if (membership is not None and not membership.is_member
+                and not product.open_to_non_members):
+            raise serializers.ValidationError({"product": [
+                f"{product.name} is for members only."]})
+        # Snapshot the product's interest rate onto the loan at application —
+        # the non-member rate when this applicant is not a member.
         validated_data.setdefault("interest_rate",
-                                  validated_data["product"].interest_rate)
+                                  product.interest_rate_for(membership))
         # And its application fee, so the applicant is held to the fee they
         # were shown even if the product's fee changes before approval.
         validated_data["application_fee"] = (

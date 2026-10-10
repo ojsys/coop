@@ -142,13 +142,25 @@ class Role(TenantScopedModel, TimeStampedModel):
 
 
 class Membership(TenantScopedModel, TimeStampedModel):
-    """A person's relationship with one cooperative."""
+    """A person's relationship with one cooperative.
+
+    Usually a member. Some societies also serve **non-members** — people who
+    borrow, save and use the app but have not joined: they hold no shares, so
+    they cannot vote, hold office or share in dividends. They sit on the same
+    register (``kind``) so loans, repayments, statements and the ledger work
+    for them unchanged, and they count towards the society's pricing band like
+    anyone else it serves. An officer can convert one to a member.
+    """
 
     class Status(models.TextChoices):
         PROSPECTIVE = "prospective", "Prospective"
         ACTIVE = "active", "Active"
         SUSPENDED = "suspended", "Suspended"
         EXITED = "exited", "Exited"
+
+    class Kind(models.TextChoices):
+        MEMBER = "member", "Member"
+        NON_MEMBER = "non_member", "Non-member"
 
     user = models.ForeignKey(
         User, on_delete=models.PROTECT, related_name="memberships",
@@ -158,6 +170,9 @@ class Membership(TenantScopedModel, TimeStampedModel):
         null=True, blank=True,
     )
     member_no = models.CharField(max_length=40)
+    kind = models.CharField(
+        max_length=12, choices=Kind.choices, default=Kind.MEMBER,
+    )
     status = models.CharField(
         max_length=12, choices=Status.choices, default=Status.ACTIVE,
     )
@@ -208,6 +223,11 @@ class Membership(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.member_no} ({self.user.full_name})"
+
+    @property
+    def is_member(self) -> bool:
+        """A full member: may vote, hold office and receive dividends."""
+        return self.kind == self.Kind.MEMBER
 
     @property
     def savings_balance(self):

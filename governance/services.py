@@ -55,6 +55,10 @@ def cast_vote(resolution, membership, choice, *, at=None):
         raise GovernanceError("Member is not part of this cooperative.")
     if membership.status != Membership.Status.ACTIVE:
         raise GovernanceError("Only active members may vote.")
+    if not membership.is_member:
+        # Someone the society serves but who has not joined holds no shares
+        # and has no say in how the society is run.
+        raise GovernanceError("Non-members cannot vote.")
     if choice not in Vote.Choice.values:
         raise GovernanceError(f"Invalid choice: {choice!r}")
     if Vote.all_objects.filter(resolution=resolution,

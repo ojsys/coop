@@ -33,6 +33,13 @@ class LoanProduct(TenantScopedModel, TimeStampedModel):
     application_fee_flat = models.DecimalField(
         max_digits=14, decimal_places=2, default=0,
         help_text="Fixed application fee, added to any percentage fee.")
+    # Whether a non-member (someone the society serves who has not joined)
+    # may apply, and at what rate. Blank rate = the same as members.
+    open_to_non_members = models.BooleanField(default=False)
+    non_member_interest_rate = models.DecimalField(
+        max_digits=5, decimal_places=2, null=True, blank=True,
+        help_text="Flat interest rate (%) for non-members. Blank = same as "
+                  "members.")
     active = models.BooleanField(default=True)
 
     class Meta:
@@ -40,6 +47,13 @@ class LoanProduct(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return self.name
+
+    def interest_rate_for(self, membership) -> Decimal:
+        """The rate this applicant borrows at."""
+        if (membership is not None and not membership.is_member
+                and self.non_member_interest_rate is not None):
+            return self.non_member_interest_rate
+        return self.interest_rate
 
     def application_fee_for(self, principal) -> Decimal:
         """The fee on a loan of ``principal``, rounded to kobo."""

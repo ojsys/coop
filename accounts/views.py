@@ -78,7 +78,31 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         status = self.request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
+        kind = self.request.query_params.get("kind")
+        if kind:
+            qs = qs.filter(kind=kind)
         return qs
+
+    @action(detail=True, methods=["post"], url_path="convert-to-member")
+    def convert_to_member(self, request, pk=None):
+        """Make a non-member a full member: they may then vote, hold office,
+        hold shares and receive dividends. Their loans, savings and history
+        carry over unchanged — it is the same record."""
+        from audit.services import record_action
+
+        membership = self.get_object()
+        if membership.is_member:
+            return Response({"detail": "This person is already a member."},
+                            status=400)
+        membership.kind = Membership.Kind.MEMBER
+        membership.save(update_fields=["kind", "updated_at"])
+        record_action(
+            cooperative=membership.cooperative, actor=request.user,
+            action="member.converted_to_member", entity=membership,
+            before={"kind": Membership.Kind.NON_MEMBER},
+            after={"kind": Membership.Kind.MEMBER},
+        )
+        return Response(self.get_serializer(membership).data)
 
     def perform_create(self, serializer):
         """Create the member, then invite them to set their own password.

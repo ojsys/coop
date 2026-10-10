@@ -41,6 +41,10 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
                   "statement_footer"]
 
     _BRANDING = ("logo", "favicon", "brand_color")
+    # Set by the platform, not the society: billing follows the plan's member
+    # band, and a size label or cap a society typed itself showed officers a
+    # plan and a limit that billing never used.
+    _PLATFORM_ONLY = ("tier", "member_cap")
 
     def validate(self, attrs):
         """Changing the society's branding follows its plan.
@@ -51,6 +55,10 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
         from core.entitlements import CUSTOM_BRANDING, require_feature
 
         request = self.context.get("request")
+        if request is not None and not getattr(request.user,
+                                               "is_platform_admin", False):
+            for field in self._PLATFORM_ONLY:
+                attrs.pop(field, None)
         changing = [f for f in self._BRANDING if f in attrs and (
             self.instance is None or attrs[f] != getattr(self.instance, f))]
         if (changing and self.instance is not None and request is not None

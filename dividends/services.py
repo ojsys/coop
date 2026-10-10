@@ -50,8 +50,11 @@ def _surplus_account(cooperative):
 def _eligible_members(cooperative):
     from accounts.models import Membership
 
+    # Members only: a dividend is a return on shares, and a non-member holds
+    # none, whatever a stray share-capital figure on their record says.
     return list(Membership.all_objects.filter(
         cooperative=cooperative, status=Membership.Status.ACTIVE,
+        kind=Membership.Kind.MEMBER,
         share_capital__gt=0).select_related("user"))
 
 

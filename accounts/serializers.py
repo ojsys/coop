@@ -33,21 +33,39 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
         fields = ["id", "cooperative_id", "cooperative_name",
                   "cooperative_slug", "cooperative_logo",
                   "cooperative_favicon", "cooperative_brand_color",
-                  "member_no", "role_slug", "role_name",
+                  "member_no", "kind", "role_slug", "role_name",
                   "is_privileged", "is_officer", "status", "share_capital",
                   "plan"]
 
     def get_plan(self, obj) -> dict:
+        """The society's subscription as the console shows it.
+
+        The member band and count are the ones billing uses (active people on
+        the register, members and non-members alike), so the console cannot
+        show a different picture from the invoice.
+        """
         from core.entitlements import features_for, in_grace, subscription_for
+        from platform_admin.billing import active_members
 
         sub = subscription_for(obj.cooperative)
+        plan = sub.plan if sub else None
+        amount = sub.cycle_amount if sub else None
         return {
-            "name": sub.plan.name if sub else None,
+            "name": plan.name if plan else None,
             "features": sorted(features_for(obj.cooperative)),
             # Set while the society keeps every feature regardless of plan, so
             # the console can say when that ends.
             "grace_until": (sub.features_grace_until
                             if sub and in_grace(sub) else None),
+            "band_label": plan.band_label if plan else None,
+            "min_members": plan.min_members if plan else None,
+            # 0 = no upper limit.
+            "max_members": plan.max_members if plan else None,
+            "members_counted": active_members(obj.cooperative),
+            "billing_cycle": sub.billing_cycle if sub else None,
+            "cycle_amount": str(amount) if amount is not None else None,
+            "status": sub.status if sub else None,
+            "renews_on": sub.current_period_end if sub else None,
         }
 
     def to_representation(self, instance):
@@ -132,11 +150,14 @@ class MembershipSerializer(serializers.ModelSerializer):
     )
     document_count = serializers.IntegerField(source="documents.count",
                                               read_only=True)
+    kind_display = serializers.CharField(source="get_kind_display",
+                                         read_only=True)
 
     class Meta:
         model = Membership
         fields = ["id", "member_no", "full_name", "email", "phone", "role",
-                  "role_name", "status", "share_capital", "joined_at",
+                  "role_name", "kind", "kind_display", "status",
+                  "share_capital", "joined_at",
                   "exited_at", "savings_balance",
                   # KYC / headshot
                   "photo", "date_of_birth", "gender", "address", "occupation",
@@ -180,9 +201,14 @@ class MembershipSerializer(serializers.ModelSerializer):
 
         Role changes are how admin is granted and revoked, which is the point
         — but revoking the only one leaves a cooperative nobody can manage.
+
+        Also keeps a non-member a non-member in substance: no office, no
+        shares. Kind is chosen when the person is added; turning a non-member
+        into a member is the explicit convert action, not a field edit.
         """
         from accounts.join_services import LastOfficerError, check_officer_remains
 
+        self._check_non_member(attrs)
         if self.instance is None:
             return attrs
         if "role" not in attrs and "status" not in attrs:
@@ -201,6 +227,29 @@ class MembershipSerializer(serializers.ModelSerializer):
         except LastOfficerError as exc:
             raise serializers.ValidationError({"role": [str(exc)]}) from exc
         return attrs
+
+    def _check_non_member(self, attrs):
+        def current(field, default=None):
+            if field in attrs:
+                return attrs[field]
+            return getattr(self.instance, field, default)
+
+        if (self.instance is not None and "kind" in attrs
+                and attrs["kind"] != self.instance.kind):
+            raise serializers.ValidationError({"kind": [
+                "A person's kind is set when they are added. To make a "
+                "non-member a member, use Convert to member."]})
+        if current("kind", Membership.Kind.MEMBER) != Membership.Kind.NON_MEMBER:
+            return
+        role = current("role")
+        if role is not None and role.is_officer:
+            raise serializers.ValidationError({"role": [
+                "Offices are held by members. Convert this person to a "
+                "member first."]})
+        if (current("share_capital") or 0) > 0:
+            raise serializers.ValidationError({"share_capital": [
+                "Non-members hold no shares. Convert this person to a member "
+                "to record share capital."]})
 
     def update(self, instance, validated_data):
         # Editable: the person's name/phone (on the shared User) plus the
@@ -245,7 +294,8 @@ class MemberSelfSerializer(MembershipSerializer):
     BANK_FIELDS = ("bank_name", "bank_code", "bank_account_no")
 
     class Meta(MembershipSerializer.Meta):
-        read_only_fields = ["member_no", "role", "status", "share_capital",
+        read_only_fields = ["member_no", "role", "kind", "status",
+                            "share_capital",
                             "joined_at", "exited_at", "savings_balance",
                             "document_count"]
 

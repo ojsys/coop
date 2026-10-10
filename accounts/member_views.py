@@ -309,7 +309,12 @@ class MemberLoanProductViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return LoanProduct.objects.filter(active=True)
+        qs = LoanProduct.objects.filter(active=True)
+        membership = _membership(self.request)
+        # A non-member is shown only what they may apply for.
+        if membership is not None and not membership.is_member:
+            qs = qs.filter(open_to_non_members=True)
+        return qs
 
 
 class MemberSavingsProductViewSet(TenantScopedViewMixin, mixins.ListModelMixin,

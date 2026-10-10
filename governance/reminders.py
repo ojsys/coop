@@ -49,7 +49,9 @@ def send_meeting_reminders(cooperative, *, days_ahead=2, dry_run=False):
 
     members = list(
         Membership.all_objects
-        .filter(cooperative=cooperative, status=Membership.Status.ACTIVE)
+        # Meetings are for members; non-members have no vote to cast there.
+        .filter(cooperative=cooperative, status=Membership.Status.ACTIVE,
+                kind=Membership.Kind.MEMBER)
         .select_related("user")
     )
 
