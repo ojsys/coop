@@ -192,3 +192,52 @@ def test_existing_subscribers_move_to_their_band_at_the_new_price(coop):
     assert set(Plan.objects.filter(active=True).values_list(
         "name", flat=True)) == {"Starter", "Growth", "Professional",
                                 "Institutional"}
+
+
+# ── The member cap follows the plan ────────────────────────────────────────
+def test_putting_a_live_society_on_a_plan_gives_starter_and_its_cap(
+        coop, price_list):
+    """A society billing never reached, as the live one was."""
+    from datetime import timedelta
+
+    from django.core.management import call_command
+    from django.utils import timezone
+
+    from tenants.models import Cooperative
+
+    coop.status = Cooperative.Status.ACTIVE
+    coop.member_cap = 5500
+    coop.save()
+
+    call_command("backfill_subscriptions")
+
+    sub = Subscription.objects.get(cooperative=coop)
+    coop.refresh_from_db()
+    assert sub.plan.name == "Starter"
+    assert coop.member_cap == 250
+    # Keeps every feature for 30 days, as the other existing societies did.
+    assert sub.features_grace_until == timezone.localdate() + timedelta(
+        days=30)
+
+
+def test_changing_plan_moves_the_cap(coop, price_list):
+    sub = _subscription(coop, price_list["Starter"],
+                        Subscription.Cycle.MONTHLY)
+    coop.refresh_from_db()
+    assert coop.member_cap == 250
+
+    sub.plan = price_list["Growth"]
+    sub.save()
+    coop.refresh_from_db()
+    assert coop.member_cap == 1000
+
+
+def test_an_open_ended_band_leaves_the_cap_alone(coop, price_list):
+    coop.member_cap = 8000
+    coop.save()
+
+    _subscription(coop, price_list["Institutional"],
+                  Subscription.Cycle.MONTHLY)
+
+    coop.refresh_from_db()
+    assert coop.member_cap == 8000

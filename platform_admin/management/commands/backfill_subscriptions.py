@@ -24,12 +24,18 @@ silently for ever.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 from django.conf import settings
 from django.core.management.base import BaseCommand
+from django.utils import timezone
 
 from platform_admin.billing import active_members, ensure_subscription, plan_for
 from platform_admin.models import Subscription
 from tenants.models import Cooperative
+
+
+GRACE_DAYS = 30
 
 
 class Command(BaseCommand):
@@ -71,7 +77,16 @@ class Command(BaseCommand):
                 self.stdout.write(
                     f"  would start {coop.slug} on {plan.name}")
             else:
-                ensure_subscription(coop)
+                sub = ensure_subscription(coop)
+                # An existing society keeps every feature for the same 30 days
+                # the others got when plan features began to be enforced, so
+                # one already using, say, the disbursement wallet is not cut
+                # off the day it is put on a plan.
+                if sub is not None and sub.features_grace_until is None:
+                    sub.features_grace_until = (
+                        timezone.localdate() + timedelta(days=GRACE_DAYS))
+                    sub.save(update_fields=["features_grace_until",
+                                            "updated_at"])
                 self.stdout.write(f"  {coop.slug} → {plan.name}")
 
         self.stdout.write("")

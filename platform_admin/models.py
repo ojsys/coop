@@ -179,6 +179,20 @@ class Subscription(TimeStampedModel):
         if fields is not None and "monthly_value" not in fields:
             kwargs["update_fields"] = [*fields, "monthly_value"]
         super().save(*args, **kwargs)
+        self.sync_member_cap()
+
+    def sync_member_cap(self):
+        """Keep the society's member cap at the top of its plan's band.
+
+        The cap is a legacy field the platform dashboard still shows; left to
+        itself it read 5,000 or more on a Starter society, contradicting the
+        plan. An open-ended band (Institutional) leaves it as it is.
+        """
+        top = self.plan.max_members
+        coop = self.cooperative
+        if top and coop.member_cap != top:
+            coop.member_cap = top
+            coop.save(update_fields=["member_cap", "updated_at"])
 
 
 class Invoice(TimeStampedModel):
