@@ -28,8 +28,9 @@ _ZERO = Value(Decimal("0.00"), output_field=_MONEY)
 @admin.register(LoanProduct)
 class LoanProductAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     list_display = ("name", "cooperative", "interest_rate", "max_amount",
-                    "max_term_months", "active")
-    list_filter = ("active", "cooperative")
+                    "max_term_months", "application_fee_percent",
+                    "application_fee_flat", "open_to_non_members", "active")
+    list_filter = ("active", "open_to_non_members", "cooperative")
     search_fields = ("name",)
     ordering = ("cooperative", "name")
     autocomplete_fields = ("cooperative",)
@@ -116,7 +117,8 @@ class LoanAdminForm(forms.ModelForm):
 @admin.register(Loan)
 class LoanAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     list_display = ("id", "membership", "product", "principal", "interest_rate",
-                    "term_months", "status", "outstanding", "cooperative")
+                    "application_fee", "term_months", "status", "outstanding",
+                    "cooperative")
     list_filter = ("status", "cooperative", "product", "created_at")
     search_fields = ("membership__member_no", "membership__user__full_name",
                      "purpose")

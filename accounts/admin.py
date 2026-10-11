@@ -303,9 +303,10 @@ class MembershipAdminForm(forms.ModelForm):
 class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
     form = MembershipAdminForm
 
-    list_display = ("member_no", "member_name", "cooperative", "role", "status",
-                    "share_capital", "savings_balance", "joined_at")
-    list_filter = ("status", "cooperative", "role", "gender", "joined_at")
+    list_display = ("member_no", "member_name", "cooperative", "kind", "role",
+                    "status", "share_capital", "savings_balance", "joined_at")
+    list_filter = ("kind", "status", "cooperative", "role", "gender",
+                   "joined_at")
     search_fields = ("member_no", "user__full_name", "user__email",
                      "user__phone")
     ordering = ("cooperative", "member_no")
@@ -318,7 +319,8 @@ class MembershipAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
 
     fieldsets = (
         (None, {
-            "fields": ("cooperative", "user", "member_no", "role", "status"),
+            "fields": ("cooperative", "user", "member_no", "kind", "role",
+                       "status"),
         }),
         ("Person", {
             "description": "Name and phone are stored on the user record, so a "
