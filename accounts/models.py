@@ -235,9 +235,47 @@ class Membership(TenantScopedModel, TimeStampedModel):
 
         Never stored; always summed from the append-only ledger.
         """
+        listed = getattr(self, "listed_balance", None)
+        if listed is not None:
+            return listed
         from ledger.services import member_balance
 
         return member_balance(self)
+
+    @classmethod
+    def with_list_figures(cls, qs):
+        """Annotate each row's savings balance and document count.
+
+        A list of members otherwise costs two queries per member — one ledger
+        sum for the balance, one count of documents — which is thousands for a
+        large society. The balance is the same sum ``member_balance`` takes:
+        credits less debits on liability accounts, from the ledger.
+        """
+        from django.db.models import (Count, DecimalField, F, OuterRef,
+                                      Subquery, Sum, Value)
+        from django.db.models.functions import Coalesce
+
+        from ledger.models import Account, LedgerEntry
+
+        money = DecimalField(max_digits=16, decimal_places=2)
+        balance = (LedgerEntry.all_objects
+                   .filter(membership=OuterRef("pk"),
+                           account__kind=Account.Kind.LIABILITY)
+                   .values("membership")
+                   .annotate(b=Sum(F("credit") - F("debit")))
+                   .values("b"))
+        documents = (MemberDocument.all_objects
+                     .filter(membership=OuterRef("pk"))
+                     .values("membership")
+                     .annotate(n=Count("id"))
+                     .values("n"))
+        return qs.annotate(
+            listed_balance=Coalesce(Subquery(balance, output_field=money),
+                                    Value(0), output_field=money),
+            listed_document_count=Coalesce(
+                Subquery(documents, output_field=models.IntegerField()),
+                Value(0)),
+        )
 
 
 class MemberDocument(TenantScopedModel, TimeStampedModel):

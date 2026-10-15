@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from django.db import IntegrityError
-from django.db.models import ProtectedError
+from django.db.models import ProtectedError, Q
 from rest_framework import mixins, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -14,7 +13,7 @@ from accounts.serializers import (
     MemberDocumentSerializer, MembershipSerializer, RoleSerializer,
     UserSerializer,
 )
-from core.permissions import IsPrivilegedOfficerOrReadOnly
+from core.permissions import IsPrivilegedOfficerOrReadOnly, is_office_holder
 from core.views import TenantScopedViewMixin
 from ledger.services import member_statement
 
@@ -69,19 +68,49 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     # membership onto a privileged role and take the society over, or demote its
     # real officers. (MemberSelfSerializer makes those read-only, but it is only
     # wired into /me/profile/.)
+    #
+    # Reading every member's record — date of birth, address, next of kin,
+    # bank account — is for office-holders. An ordinary member reads only their
+    # own (the member app fetches its statement here).
     permission_classes = [IsPrivilegedOfficerOrReadOnly]
     # Accept multipart so a headshot can be uploaded alongside member fields.
     parser_classes = [MultiPartParser, FormParser, JSONParser]
+    # The console searches, filters and counts the whole list on the client,
+    # reading it in pages of up to 500 (core.pagination). Balances and document
+    # counts are annotated (Membership.with_list_figures), so each page is one
+    # query however large the society.
 
     def get_queryset(self):
-        qs = Membership.objects.select_related("user", "role")
+        qs = Membership.with_list_figures(
+            Membership.objects.select_related("user", "role"))
+        if not is_office_holder(self.request.user, self.request):
+            qs = qs.filter(user=self.request.user)
         status = self.request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
         kind = self.request.query_params.get("kind")
         if kind:
             qs = qs.filter(kind=kind)
-        return qs
+        search = (self.request.query_params.get("search") or "").strip()
+        if search:
+            qs = qs.filter(Q(user__full_name__icontains=search)
+                           | Q(member_no__icontains=search)
+                           | Q(user__email__icontains=search)
+                           | Q(user__phone__icontains=search))
+        return qs.order_by("member_no")
+
+    def retrieve(self, request, *args, **kwargs):
+        """A member's full profile. When platform staff open one — for KYC or a
+        support check — that look at regulated personal data is audited."""
+        membership = self.get_object()
+        if request.user.is_platform_admin:
+            from audit.services import record_action
+
+            record_action(cooperative=membership.cooperative,
+                          actor=request.user,
+                          action="member.profile_viewed_by_platform",
+                          entity=membership)
+        return Response(self.get_serializer(membership).data)
 
     @action(detail=True, methods=["post"], url_path="convert-to-member")
     def convert_to_member(self, request, pk=None):
@@ -195,11 +224,15 @@ class MemberDocumentViewSet(TenantScopedViewMixin,
     """KYC / supporting documents for members of the active cooperative."""
 
     serializer_class = MemberDocumentSerializer
-    permission_classes = [IsAuthenticated]
+    # KYC files: officers manage them. An ordinary member sees only their own,
+    # and uploads through /me/documents/ — never deletes anyone's.
+    permission_classes = [IsPrivilegedOfficerOrReadOnly]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_queryset(self):
         qs = MemberDocument.objects.select_related("membership")
+        if not is_office_holder(self.request.user, self.request):
+            qs = qs.filter(membership__user=self.request.user)
         membership = self.request.query_params.get("membership")
         if membership:
             qs = qs.filter(membership_id=membership)

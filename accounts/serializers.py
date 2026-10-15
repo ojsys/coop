@@ -148,8 +148,7 @@ class MembershipSerializer(serializers.ModelSerializer):
     savings_balance = serializers.DecimalField(
         max_digits=16, decimal_places=2, read_only=True,
     )
-    document_count = serializers.IntegerField(source="documents.count",
-                                              read_only=True)
+    document_count = serializers.SerializerMethodField()
     kind_display = serializers.CharField(source="get_kind_display",
                                          read_only=True)
 
@@ -163,6 +162,10 @@ class MembershipSerializer(serializers.ModelSerializer):
                   "photo", "date_of_birth", "gender", "address", "occupation",
                   "next_of_kin_name", "next_of_kin_phone", "bank_name",
                   "bank_code", "bank_account_no", "document_count"]
+
+    def get_document_count(self, obj) -> int:
+        listed = getattr(obj, "listed_document_count", None)
+        return listed if listed is not None else obj.documents.count()
 
     def to_representation(self, instance):
         """Hand out a signed, expiring URL for the member's photograph.

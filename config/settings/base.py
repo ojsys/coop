@@ -86,8 +86,7 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
     ],
-    'DEFAULT_PAGINATION_CLASS':
-        'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.StandardPagination',
     'PAGE_SIZE': 25,
     # Logs every API failure before returning DRF's normal response. Without
     # this, 4xx responses never reach any logger (see core/exception_handler).

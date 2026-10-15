@@ -276,6 +276,39 @@ class PlatformViewSet(viewsets.ViewSet):
 
         return Response(platform_overview())
 
+    @action(detail=False, methods=["get"], url_path="member-search")
+    def member_search(self, request):
+        """Find a person across every cooperative — for KYC and support.
+
+        Returns who and where only (name, number, contact, society); the full
+        profile is opened per cooperative, where that look is audited.
+        """
+        from django.db.models import Q
+
+        from accounts.models import Membership
+
+        q = (request.query_params.get("q") or "").strip()
+        if len(q) < 2:
+            return Response([])
+        rows = (Membership.all_objects
+                .select_related("user", "cooperative")
+                .filter(Q(user__full_name__icontains=q)
+                        | Q(member_no__icontains=q)
+                        | Q(user__email__icontains=q)
+                        | Q(user__phone__icontains=q))
+                .order_by("user__full_name")[:50])
+        return Response([{
+            "id": m.id,
+            "full_name": m.user.full_name,
+            "member_no": m.member_no,
+            "email": m.user.email,
+            "phone": m.user.phone,
+            "kind": m.kind,
+            "status": m.status,
+            "cooperative_id": m.cooperative_id,
+            "cooperative_name": m.cooperative.name,
+        } for m in rows])
+
     @action(detail=False, methods=["get"])
     def analytics(self, request):
         from platform_admin.services import analytics
