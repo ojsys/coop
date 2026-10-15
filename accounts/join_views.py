@@ -1,13 +1,14 @@
 """
 Signup endpoints.
 
-Three are public (a society applying, a person asking to join, and the society
-search that makes the second usable); one is for officers deciding those
+Four are public (a society applying, a person asking to join, and the society
+search and invite-link lookup that make the second usable); one is for officers deciding those
 requests. The public ones create rows and send mail on behalf of a stranger, so
 they are throttled and validate carefully.
 """
 from __future__ import annotations
 
+from django.http import Http404
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -94,6 +95,35 @@ class PublicSocietySearchView(PublicView):
             .order_by("name")[:self.LIMIT]
         )
         return Response(PublicSocietySerializer(societies, many=True).data)
+
+
+class JoinLinkSocietySerializer(PublicSocietySerializer):
+    """What an invite link shows: enough to recognise your own society."""
+
+    logo = serializers.ImageField(read_only=True)
+
+    class Meta(PublicSocietySerializer.Meta):
+        fields = PublicSocietySerializer.Meta.fields + ["logo", "brand_color"]
+
+
+class JoinLinkView(PublicView):
+    """`GET /public/join/<code>/` — the society behind an invite link.
+
+    The invite link replaces the search for members an officer sent it to. An
+    unknown code, a link the officers have switched off and a society that is
+    not live all answer the same 404, so the endpoint reveals nothing a search
+    would not.
+    """
+
+    def get(self, request, code):
+        society = Cooperative.objects.filter(
+            join_code__iexact=code.strip(), join_link_enabled=True,
+            status=Cooperative.Status.ACTIVE,
+        ).first()
+        if society is None:
+            raise Http404
+        return Response(JoinLinkSocietySerializer(
+            society, context={"request": request}).data)
 
 
 class JoinRequestCreateSerializer(serializers.Serializer):

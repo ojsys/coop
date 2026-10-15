@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import re
+
 from rest_framework import serializers
 
 from tenants.models import Cooperative
+
+
+JOIN_CODE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class CooperativeSerializer(serializers.ModelSerializer):
@@ -13,7 +18,8 @@ class CooperativeSerializer(serializers.ModelSerializer):
                   "brand_color", "logo", "favicon", "member_cap", "bank_name",
                   "bank_account_name", "bank_account_no",
                   "contact_email", "contact_phone", "contact_address",
-                  "statement_footer", "created_at"]
+                  "statement_footer", "join_code", "join_link_enabled",
+                  "created_at"]
         read_only_fields = ["status"]
 
 
@@ -38,13 +44,35 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
                   "logo",
                   "favicon", "member_cap",
                   "contact_email", "contact_phone", "contact_address",
-                  "statement_footer"]
+                  "statement_footer", "join_code", "join_link_enabled"]
 
     _BRANDING = ("logo", "favicon", "brand_color")
     # Set by the platform, not the society: billing follows the plan's member
     # band, and a size label or cap a society typed itself showed officers a
     # plan and a limit that billing never used.
     _PLATFORM_ONLY = ("tier", "member_cap")
+
+    def validate_join_code(self, value):
+        """The tail of the society's invite link: /join/<code>.
+
+        Lowercase letters, digits and single hyphens, so it survives being read
+        aloud at a meeting or typed from a WhatsApp message.
+        """
+        code = (value or "").strip().lower()
+        if not 3 <= len(code) <= 50:
+            raise serializers.ValidationError(
+                "Use between 3 and 50 characters.")
+        if not JOIN_CODE_RE.match(code):
+            raise serializers.ValidationError(
+                "Use only letters, numbers and single hyphens between words "
+                "(e.g. imole-farmers).")
+        taken = Cooperative.objects.filter(join_code__iexact=code)
+        if self.instance is not None:
+            taken = taken.exclude(pk=self.instance.pk)
+        if taken.exists():
+            raise serializers.ValidationError(
+                "Another cooperative is already using that link.")
+        return code
 
     def validate(self, attrs):
         """Changing the society's branding follows its plan.

@@ -92,12 +92,35 @@ class Cooperative(TimeStampedModel):
     bank_code = models.CharField(max_length=10, blank=True)
     bank_account_name = models.CharField(max_length=200, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
+    # The society's invite link is /join/<join_code>. Separate from ``slug``,
+    # which is identity and cannot change from the console: officers pick a
+    # code that is easy to say and type ("imole-farmers"), and changing it is
+    # also how they retire a link that has been passed around too widely.
+    # Stored lowercase; looked up case-insensitively.
+    join_code = models.SlugField(max_length=50, unique=True, null=True,
+                                 blank=True)
+    join_link_enabled = models.BooleanField(default=True)
 
     class Meta:
         ordering = ["name"]
 
     def __str__(self) -> str:
         return self.name
+
+    def save(self, *args, **kwargs):
+        # Every society gets a working link from the start, from its slug —
+        # unless another society has already chosen that as its code.
+        if not self.join_code and self.slug:
+            self.join_code = self._free_join_code(self.slug[:50])
+        super().save(*args, **kwargs)
+
+    def _free_join_code(self, base: str) -> str:
+        taken = Cooperative.objects.exclude(pk=self.pk)
+        code, n = base, 1
+        while taken.filter(join_code__iexact=code).exists():
+            n += 1
+            code = f"{base[:46]}-{n}"
+        return code
 
     def seed_chart_of_accounts(self) -> None:
         """Create the baseline accounts a new cooperative needs to post.

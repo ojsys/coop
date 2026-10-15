@@ -13,7 +13,8 @@ from accounts.auth_views import (
     LoginView, PasswordResetConfirmView, PasswordResetRequestView,
 )
 from accounts.join_views import (
-    CooperativeApplicationView, JoinRequestCreateView, JoinRequestViewSet,
+    CooperativeApplicationView, JoinLinkView, JoinRequestCreateView,
+    JoinRequestViewSet,
     PublicSocietySearchView,
 )
 from accounts.views import (
@@ -167,6 +168,9 @@ urlpatterns = [
          name="public-apply"),
     path("public/join/", JoinRequestCreateView.as_view(),
          name="public-join"),
+    # A society's invite link, /join/<code> in the app.
+    path("public/join/<str:code>/", JoinLinkView.as_view(),
+         name="public-join-link"),
     # The invoice pay link an officer follows from their inbox. `verify` is
     # declared FIRST: <str:pay_token> would otherwise capture the literal
     # "verify" as a token and the verification endpoint would be unreachable.
