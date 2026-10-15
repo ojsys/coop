@@ -208,6 +208,25 @@ class Membership(TenantScopedModel, TimeStampedModel):
     bank_code = models.CharField(max_length=10, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
 
+    # The verified badge. A member earns it automatically by completing their
+    # profile and uploading a means of ID (see ``is_verified``), or an officer
+    # grants it outright. Only the officer's decision is stored; the automatic
+    # part is computed on read, so deleting the ID or blanking a field takes
+    # the badge away again without every write path having to remember to.
+    class Verification(models.TextChoices):
+        AUTOMATIC = "", "Automatic"
+        OFFICER = "officer", "Verified by an officer"
+        # An officer took the badge away: it stays off, however complete the
+        # profile, until an officer verifies the member again.
+        REVOKED = "revoked", "Withdrawn by an officer"
+
+    verification = models.CharField(
+        max_length=10, choices=Verification.choices, blank=True, default="")
+    verified_by = models.ForeignKey(
+        User, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name="+")
+    verified_at = models.DateTimeField(null=True, blank=True)
+
     class Meta:
         constraints = [
             models.UniqueConstraint(
@@ -229,6 +248,51 @@ class Membership(TenantScopedModel, TimeStampedModel):
         """A full member: may vote, hold office and receive dividends."""
         return self.kind == self.Kind.MEMBER
 
+    # What "a completed profile" means for the badge, as (label, check) pairs.
+    # Bank details are left out on purpose: they are about paying the member,
+    # not about who the member is.
+    PROFILE_REQUIREMENTS = (
+        ("Full name", lambda m: m.user.full_name),
+        ("Phone number", lambda m: m.user.phone),
+        ("Photo", lambda m: m.photo),
+        ("Date of birth", lambda m: m.date_of_birth),
+        ("Gender", lambda m: m.gender),
+        ("Address", lambda m: m.address),
+        ("Occupation", lambda m: m.occupation),
+        ("Next of kin", lambda m: m.next_of_kin_name),
+        ("Next of kin's phone", lambda m: m.next_of_kin_phone),
+    )
+
+    @property
+    def has_id_document(self) -> bool:
+        listed = getattr(self, "listed_has_id_document", None)
+        if listed is not None:
+            return listed
+        return self.documents.filter(
+            doc_type=MemberDocument.DocType.ID).exists()
+
+    @property
+    def verification_missing(self) -> list[str]:
+        """What the member still has to supply to be verified automatically."""
+        missing = [label for label, present in self.PROFILE_REQUIREMENTS
+                   if not present(self)]
+        if not self.has_id_document:
+            missing.append("Means of ID document")
+        return missing
+
+    @property
+    def verified_via(self) -> str | None:
+        """``"officer"``, ``"profile"``, or None when not verified."""
+        if self.verification == self.Verification.OFFICER:
+            return "officer"
+        if self.verification == self.Verification.REVOKED:
+            return None
+        return "profile" if not self.verification_missing else None
+
+    @property
+    def is_verified(self) -> bool:
+        return self.verified_via is not None
+
     @property
     def savings_balance(self):
         """Derived member balance — total member funds held for this member.
@@ -244,15 +308,16 @@ class Membership(TenantScopedModel, TimeStampedModel):
 
     @classmethod
     def with_list_figures(cls, qs):
-        """Annotate each row's savings balance and document count.
+        """Annotate each row's savings balance, document count and whether it
+        has a means of ID (for the verified badge).
 
         A list of members otherwise costs two queries per member — one ledger
         sum for the balance, one count of documents — which is thousands for a
         large society. The balance is the same sum ``member_balance`` takes:
         credits less debits on liability accounts, from the ledger.
         """
-        from django.db.models import (Count, DecimalField, F, OuterRef,
-                                      Subquery, Sum, Value)
+        from django.db.models import (Count, DecimalField, Exists, F,
+                                      OuterRef, Subquery, Sum, Value)
         from django.db.models.functions import Coalesce
 
         from ledger.models import Account, LedgerEntry
@@ -269,12 +334,16 @@ class Membership(TenantScopedModel, TimeStampedModel):
                      .values("membership")
                      .annotate(n=Count("id"))
                      .values("n"))
+        id_documents = MemberDocument.all_objects.filter(
+            membership=OuterRef("pk"), doc_type=MemberDocument.DocType.ID)
         return qs.annotate(
             listed_balance=Coalesce(Subquery(balance, output_field=money),
                                     Value(0), output_field=money),
             listed_document_count=Coalesce(
                 Subquery(documents, output_field=models.IntegerField()),
                 Value(0)),
+            # So the verified badge costs no query per row either.
+            listed_has_id_document=Exists(id_documents),
         )
 
 

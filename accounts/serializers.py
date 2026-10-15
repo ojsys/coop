@@ -151,6 +151,16 @@ class MembershipSerializer(serializers.ModelSerializer):
     document_count = serializers.SerializerMethodField()
     kind_display = serializers.CharField(source="get_kind_display",
                                          read_only=True)
+    # The verified badge (see Membership.is_verified). All read-only: an
+    # officer changes it through /members/{id}/verify/ and /unverify/, which
+    # are audited, never by a profile PATCH.
+    is_verified = serializers.BooleanField(read_only=True)
+    verified_via = serializers.CharField(read_only=True)
+    verification_missing = serializers.ListField(
+        child=serializers.CharField(), read_only=True)
+    verification_withdrawn = serializers.SerializerMethodField()
+    verified_by_name = serializers.CharField(
+        source="verified_by.full_name", read_only=True, default=None)
 
     class Meta:
         model = Membership
@@ -161,7 +171,14 @@ class MembershipSerializer(serializers.ModelSerializer):
                   # KYC / headshot
                   "photo", "date_of_birth", "gender", "address", "occupation",
                   "next_of_kin_name", "next_of_kin_phone", "bank_name",
-                  "bank_code", "bank_account_no", "document_count"]
+                  "bank_code", "bank_account_no", "document_count",
+                  "is_verified", "verified_via", "verification_missing",
+                  "verification_withdrawn", "verified_by_name",
+                  "verified_at"]
+        read_only_fields = ["verified_at"]
+
+    def get_verification_withdrawn(self, obj) -> bool:
+        return obj.verification == Membership.Verification.REVOKED
 
     def get_document_count(self, obj) -> int:
         listed = getattr(obj, "listed_document_count", None)
@@ -300,7 +317,7 @@ class MemberSelfSerializer(MembershipSerializer):
         read_only_fields = ["member_no", "role", "kind", "status",
                             "share_capital",
                             "joined_at", "exited_at", "savings_balance",
-                            "document_count"]
+                            "document_count", "verified_at"]
 
     def validate(self, attrs):
         """Refuse a bank-detail *change* while the member has a live loan.

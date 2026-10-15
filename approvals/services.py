@@ -9,6 +9,41 @@ class ApprovalError(Exception):
     """An approval request could not be submitted or decided."""
 
 
+def officer_user_ids(cooperative) -> set[int]:
+    """Everyone holding an office (any role beyond a plain member's) on the
+    cooperative's active register, counted once per person."""
+    from accounts.models import Membership, Role
+
+    memberships = (
+        Membership.all_objects
+        .filter(cooperative=cooperative, status=Membership.Status.ACTIVE,
+                role__isnull=False)
+        .exclude(role__slug=Role.MEMBER)
+        .select_related("role")
+    )
+    return {m.user_id for m in memberships if m.role.is_officer}
+
+
+def is_sole_secretary(cooperative, user) -> bool:
+    """Whether ``user`` is the Secretary and the cooperative's only officer.
+
+    Small societies, often in remote places, are sometimes run by one person.
+    Dual control cannot work there — there is no second officer to check — and
+    insisting on it left every loan, withdrawal and bank change stuck forever.
+    So the sole Secretary may approve their own requests, and this stops being
+    true the moment a second officer is added.
+    """
+    from accounts.models import Membership, Role
+
+    if not (user and getattr(user, "id", None)):
+        return False
+    holds_secretary = Membership.all_objects.filter(
+        cooperative=cooperative, user=user,
+        status=Membership.Status.ACTIVE, role__slug=Role.SECRETARY,
+    ).exists()
+    return holds_secretary and officer_user_ids(cooperative) == {user.id}
+
+
 def _resolve(cooperative, action, object_id):
     """Return the target object + a human summary for an action."""
     from approvals.models import ApprovalRequest
@@ -77,12 +112,17 @@ def submit_request(*, cooperative, action, object_id, requested_by, note=""):
 def _alert_officers(request_obj):
     from communications.receipts import notify_officers_by_email
 
+    sole = is_sole_secretary(request_obj.cooperative, request_obj.requested_by)
     notify_officers_by_email(
         request_obj.cooperative,
         subject=f"Approval needed: {request_obj.get_action_display()}",
         heading="An action is waiting for approval",
-        intro="Segregation of duties applies — whoever submitted this cannot "
-              "approve it, so another officer must decide.",
+        intro=("You are the cooperative's only officer, so you may approve "
+               "this yourself. Once another officer is added, a different "
+               "officer will have to decide requests like this one."
+               if sole else
+               "Segregation of duties applies — whoever submitted this cannot "
+               "approve it, so another officer must decide."),
         rows=[
             ("Action", request_obj.get_action_display()),
             ("Details", request_obj.summary or "—"),
@@ -99,9 +139,11 @@ def decide_request(request_obj, *, actor, approve):
 
     if request_obj.status != ApprovalRequest.Status.PENDING:
         raise ApprovalError("This request has already been decided.")
-    # Segregation of duties: the checker cannot be the maker.
-    if request_obj.requested_by_id and actor \
-            and request_obj.requested_by_id == actor.id:
+    # Segregation of duties: the checker cannot be the maker — unless the
+    # maker is the Secretary running the society alone (see is_sole_secretary).
+    self_decided = bool(request_obj.requested_by_id and actor
+                        and request_obj.requested_by_id == actor.id)
+    if self_decided and not is_sole_secretary(request_obj.cooperative, actor):
         raise ApprovalError("A different officer must approve this request.")
 
     if approve:
@@ -113,6 +155,16 @@ def decide_request(request_obj, *, actor, approve):
     request_obj.decided_at = timezone.now()
     request_obj.save(update_fields=["status", "decided_by", "decided_at",
                                     "updated_at"])
+    if self_decided:
+        from audit.services import record_action
+
+        # Nobody else checked this one, so the log must say so plainly.
+        record_action(
+            cooperative=request_obj.cooperative, actor=actor,
+            action="approval.self_decided", entity=request_obj,
+            after={"status": request_obj.status,
+                   "reason": "sole officer (Secretary)"},
+        )
     return request_obj
 
 

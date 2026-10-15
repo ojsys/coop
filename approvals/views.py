@@ -6,7 +6,9 @@ from rest_framework.response import Response
 
 from approvals.models import ApprovalRequest
 from approvals.serializers import ApprovalRequestSerializer
-from approvals.services import ApprovalError, decide_request, submit_request
+from approvals.services import (
+    ApprovalError, decide_request, is_sole_secretary, submit_request,
+)
 from core.context import get_current_cooperative
 from core.permissions import IsPrivilegedOfficer
 from core.views import TenantScopedViewMixin
@@ -52,6 +54,13 @@ class ApprovalRequestViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
             return Response({"detail": str(exc)}, status=400)
         req.refresh_from_db()
         return Response(self.get_serializer(req).data)
+
+    @action(detail=False, methods=["get"])
+    def policy(self, request):
+        """Whether the caller may decide their own requests (sole Secretary),
+        so the console can say so instead of promising a second officer."""
+        return Response({"sole_secretary": is_sole_secretary(
+            get_current_cooperative(), request.user)})
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):

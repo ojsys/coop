@@ -82,7 +82,7 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Membership.with_list_figures(
-            Membership.objects.select_related("user", "role"))
+            Membership.objects.select_related("user", "role", "verified_by"))
         if not is_office_holder(self.request.user, self.request):
             qs = qs.filter(user=self.request.user)
         status = self.request.query_params.get("status")
@@ -130,6 +130,41 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
             action="member.converted_to_member", entity=membership,
             before={"kind": Membership.Kind.NON_MEMBER},
             after={"kind": Membership.Kind.MEMBER},
+        )
+        return Response(self.get_serializer(membership).data)
+
+    @action(detail=True, methods=["post"])
+    def verify(self, request, pk=None):
+        """Give the member the verified badge, whatever their profile says —
+        for an officer who has checked them in person."""
+        return self._set_verification(request, Membership.Verification.OFFICER)
+
+    @action(detail=True, methods=["post"])
+    def unverify(self, request, pk=None):
+        """Take the badge away. It stays off, however complete the profile,
+        until an officer verifies the member again."""
+        return self._set_verification(request, Membership.Verification.REVOKED)
+
+    def _set_verification(self, request, value):
+        from django.utils import timezone
+
+        from audit.services import record_action
+
+        membership = self.get_object()
+        before = membership.verified_via
+        membership.verification = value
+        membership.verified_by = request.user
+        membership.verified_at = timezone.now()
+        membership.save(update_fields=["verification", "verified_by",
+                                       "verified_at", "updated_at"])
+        record_action(
+            cooperative=membership.cooperative, actor=request.user,
+            action=("member.verified"
+                    if value == Membership.Verification.OFFICER
+                    else "member.verification_withdrawn"),
+            entity=membership,
+            before={"verified_via": before},
+            after={"verified_via": membership.verified_via},
         )
         return Response(self.get_serializer(membership).data)
 
