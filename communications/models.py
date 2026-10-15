@@ -84,6 +84,7 @@ class Notification(TenantScopedModel, TimeStampedModel):
         # "Contribution received" — the opposite of what a payout is.
         WITHDRAWAL = "withdrawal", "Savings withdrawal"
         DIVIDEND = "dividend", "Dividend"
+        VERIFICATION = "verification", "Profile verification"
 
     membership = models.ForeignKey(
         "accounts.Membership", on_delete=models.CASCADE,

@@ -135,37 +135,23 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"])
     def verify(self, request, pk=None):
-        """Give the member the verified badge, whatever their profile says —
-        for an officer who has checked them in person."""
-        return self._set_verification(request, Membership.Verification.OFFICER)
+        """Give the member the verified badge — after checking their ID, or
+        for an officer who knows them in person."""
+        from accounts.verification import decide
+
+        membership = decide(self.get_object(), actor=request.user,
+                            verify=True)
+        return Response(self.get_serializer(membership).data)
 
     @action(detail=True, methods=["post"])
     def unverify(self, request, pk=None):
-        """Take the badge away. It stays off, however complete the profile,
-        until an officer verifies the member again."""
-        return self._set_verification(request, Membership.Verification.REVOKED)
+        """Decline a member awaiting review, or withdraw their badge. The
+        ``note`` is shown to the member, so say what to fix."""
+        from accounts.verification import decide
 
-    def _set_verification(self, request, value):
-        from django.utils import timezone
-
-        from audit.services import record_action
-
-        membership = self.get_object()
-        before = membership.verified_via
-        membership.verification = value
-        membership.verified_by = request.user
-        membership.verified_at = timezone.now()
-        membership.save(update_fields=["verification", "verified_by",
-                                       "verified_at", "updated_at"])
-        record_action(
-            cooperative=membership.cooperative, actor=request.user,
-            action=("member.verified"
-                    if value == Membership.Verification.OFFICER
-                    else "member.verification_withdrawn"),
-            entity=membership,
-            before={"verified_via": before},
-            after={"verified_via": membership.verified_via},
-        )
+        membership = decide(self.get_object(), actor=request.user,
+                            verify=False,
+                            note=(request.data.get("note") or "").strip())
         return Response(self.get_serializer(membership).data)
 
     def perform_create(self, serializer):

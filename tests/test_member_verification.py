@@ -1,21 +1,23 @@
 """
-The verified badge.
+The verified badge and the profile steps that lead to it.
 
-A member earns it by completing their profile and uploading a means of ID, or
-an officer grants it outright. Pinned here: the automatic route really does
-follow the profile (both ways), an officer's decision overrides it in both
-directions, only privileged officers can make that decision, and it is audited.
+Completing the profile (details, photo, a means of ID) puts a member in the
+officers' review queue — it never verifies them by itself, because nothing
+checks the uploaded file. Only an officer verifies or declines; a decline's
+note reaches the member, and fixing their profile puts them back in the queue.
 """
 from __future__ import annotations
 
 import datetime
 
 import pytest
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APIClient
 
 from accounts.models import MemberDocument, Membership, Role, User
 from audit.models import AuditLog
+from communications.models import Notification
 from core.context import use_tenant
 
 pytestmark = pytest.mark.django_db
@@ -64,67 +66,115 @@ def _fetch(client, m):
     return client.get(f"/api/v1/members/{m.id}/").json()
 
 
-def test_a_bare_profile_is_not_verified_and_says_what_is_missing(
+def test_a_bare_profile_is_incomplete_and_says_what_is_missing(
         coop, member, secretary):
     data = _fetch(_client(secretary, coop), member)
 
+    assert data["verification_status"] == "incomplete"
     assert data["is_verified"] is False
     assert "Photo" in data["verification_missing"]
     assert "Means of ID document" in data["verification_missing"]
+    assert [s["key"] for s in data["profile_steps"]] == [
+        "details", "contact", "photo", "id"]
+    assert 0 < data["profile_percent"] < 100
 
 
-def test_a_complete_profile_without_id_is_not_enough(coop, member, secretary):
+def test_a_complete_profile_without_id_is_not_ready(coop, member, secretary):
     _complete_profile(member)
 
     data = _fetch(_client(secretary, coop), member)
 
-    assert data["is_verified"] is False
+    assert data["verification_status"] == "incomplete"
+    assert data["verification_missing"] == ["Means of ID document"]
+    assert data["profile_percent"] == 90
+
+
+def test_an_id_filed_under_the_wrong_type_does_not_count(coop, member,
+                                                         secretary):
+    """The trap behind the original report: an ID uploaded as "Other"."""
+    _complete_profile(member)
+    with use_tenant(coop):
+        MemberDocument.objects.create(
+            membership=member, doc_type=MemberDocument.DocType.OTHER,
+            file=SimpleUploadedFile("id.pdf", b"x"))
+
+    data = _fetch(_client(secretary, coop), member)
     assert data["verification_missing"] == ["Means of ID document"]
 
 
-def test_complete_profile_and_id_verifies_automatically(coop, member,
+def test_a_passport_photograph_satisfies_the_photo_step(coop, member,
                                                         secretary):
+    with use_tenant(coop):
+        MemberDocument.objects.create(
+            membership=member, doc_type=MemberDocument.DocType.PASSPORT,
+            file=SimpleUploadedFile("p.jpg", b"x"))
+
+    data = _fetch(_client(secretary, coop), member)
+    assert "Photo" not in data["verification_missing"]
+
+
+def test_completing_the_profile_awaits_review_not_verification(
+        coop, member, secretary, django_capture_on_commit_callbacks):
     _complete_profile(member)
-    doc = _add_id(member)
-    client = _client(secretary, coop)
+    client = _client(member.user, coop)
 
-    data = _fetch(client, member)
-    assert data["is_verified"] is True
-    assert data["verified_via"] == "profile"
-    # The list carries it too, without a query per row.
-    listed = {m["id"]: m for m in client.get("/api/v1/members/").json()["results"]}
-    assert listed[member.id]["is_verified"] is True
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = client.post(
+            "/api/v1/me/documents/",
+            {"doc_type": "id", "file": SimpleUploadedFile("id.pdf", b"x")},
+            format="multipart")
+    assert resp.status_code == 201, resp.content
 
-    # And it follows the profile back: remove the ID, lose the badge.
-    doc.delete()
-    assert _fetch(client, member)["is_verified"] is False
+    data = client.get("/api/v1/me/profile/").json()
+    assert data["verification_status"] == "awaiting"
+    assert data["profile_percent"] == 100
+    assert data["is_verified"] is False
+    # The member is told, and the officers are emailed.
+    assert Notification.all_objects.filter(
+        membership=member, kind=Notification.Kind.VERIFICATION).exists()
+    assert any("Ready to verify" in m.subject for m in mail.outbox)
+    # Listed with no query per row.
+    listed = {m["id"]: m for m in _client(secretary, coop)
+              .get("/api/v1/members/").json()["results"]}
+    assert listed[member.id]["verification_status"] == "awaiting"
 
 
-def test_an_officer_can_verify_a_member_with_a_bare_profile(coop, member,
-                                                            secretary):
-    client = _client(secretary, coop)
-
-    resp = client.post(f"/api/v1/members/{member.id}/verify/")
+def test_an_officer_verifies(coop, member, secretary,
+                             django_capture_on_commit_callbacks):
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = _client(secretary, coop).post(
+            f"/api/v1/members/{member.id}/verify/")
 
     assert resp.status_code == 200, resp.content
     assert resp.json()["is_verified"] is True
-    assert resp.json()["verified_via"] == "officer"
+    assert resp.json()["verification_status"] == "verified"
     assert resp.json()["verified_by_name"] == "Sec Retary"
     assert AuditLog.all_objects.filter(action="member.verified").exists()
+    assert Notification.all_objects.filter(
+        membership=member, title="You're verified").exists()
 
 
-def test_an_officer_withdrawal_overrides_a_complete_profile(coop, member,
-                                                            secretary):
+def test_a_decline_tells_the_member_why_and_a_fix_requeues_them(
+        coop, member, secretary, django_capture_on_commit_callbacks):
     _complete_profile(member)
     _add_id(member)
-    client = _client(secretary, coop)
 
-    resp = client.post(f"/api/v1/members/{member.id}/unverify/")
+    with django_capture_on_commit_callbacks(execute=True):
+        resp = _client(secretary, coop).post(
+            f"/api/v1/members/{member.id}/unverify/",
+            {"note": "ID photo is blurry"}, format="json")
+    assert resp.json()["verification_status"] == "withdrawn"
+    assert resp.json()["verification_note"] == "ID photo is blurry"
+    assert "ID photo is blurry" in Notification.all_objects.filter(
+        membership=member).latest("created_at").body
 
-    assert resp.json()["is_verified"] is False
-    assert resp.json()["verification_withdrawn"] is True
-    assert AuditLog.all_objects.filter(
-        action="member.verification_withdrawn").exists()
+    # The member uploads a clearer ID: back in the queue.
+    client = _client(member.user, coop)
+    client.post("/api/v1/me/documents/",
+                {"doc_type": "id", "file": SimpleUploadedFile("id2.pdf", b"x")},
+                format="multipart")
+    assert client.get("/api/v1/me/profile/").json()[
+        "verification_status"] == "awaiting"
 
 
 def test_a_member_cannot_verify_themselves(coop, member):
@@ -132,15 +182,7 @@ def test_a_member_cannot_verify_themselves(coop, member):
 
     assert client.post(
         f"/api/v1/members/{member.id}/verify/").status_code == 403
-    # Nor sneak it in through their own profile.
     client.patch("/api/v1/me/profile/", {"verification": "officer"},
                  format="json")
     member.refresh_from_db()
     assert member.verification == ""
-
-
-def test_a_member_sees_their_own_checklist(coop, member):
-    data = _client(member.user, coop).get("/api/v1/me/profile/").json()
-
-    assert data["is_verified"] is False
-    assert "Means of ID document" in data["verification_missing"]

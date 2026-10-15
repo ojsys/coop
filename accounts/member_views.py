@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 
 from accounts.models import MemberDocument, Membership
 from accounts.serializers import MemberDocumentSerializer, MemberSelfSerializer
+from accounts.verification import member_profile_changed
 from core.entitlements import SAVINGS_PLANS, RequiresFeatureMixin
 from core.views import TenantScopedViewMixin
 from dividends.models import DividendAllocation
@@ -77,12 +78,15 @@ class MemberProfileView(TenantScopedViewMixin, APIView):
         membership = _membership(request)
         if membership is None:
             return Response({"detail": "No membership found."}, status=404)
+        status_before = membership.verification_status
         serializer = MemberSelfSerializer(
             membership, data=request.data, partial=True,
             context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response(serializer.data)
+        member_profile_changed(membership, status_before=status_before)
+        return Response(MemberSelfSerializer(
+            membership, context={"request": request}).data)
 
 
 class MemberDocumentSelfViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
@@ -102,7 +106,10 @@ class MemberDocumentSelfViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         return MemberDocument.objects.filter(membership=membership)
 
     def perform_create(self, serializer):
-        serializer.save(membership=_membership(self.request))
+        membership = _membership(self.request)
+        status_before = membership.verification_status
+        serializer.save(membership=membership)
+        member_profile_changed(membership, status_before=status_before)
 
 
 class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,

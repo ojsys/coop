@@ -156,9 +156,14 @@ class MembershipSerializer(serializers.ModelSerializer):
     # are audited, never by a profile PATCH.
     is_verified = serializers.BooleanField(read_only=True)
     verified_via = serializers.CharField(read_only=True)
+    verification_status = serializers.CharField(read_only=True)
+    verification_note = serializers.CharField(read_only=True)
     verification_missing = serializers.ListField(
         child=serializers.CharField(), read_only=True)
     verification_withdrawn = serializers.SerializerMethodField()
+    profile_percent = serializers.IntegerField(read_only=True)
+    profile_steps = serializers.ListField(child=serializers.DictField(),
+                                          read_only=True)
     verified_by_name = serializers.CharField(
         source="verified_by.full_name", read_only=True, default=None)
 
@@ -172,9 +177,10 @@ class MembershipSerializer(serializers.ModelSerializer):
                   "photo", "date_of_birth", "gender", "address", "occupation",
                   "next_of_kin_name", "next_of_kin_phone", "bank_name",
                   "bank_code", "bank_account_no", "document_count",
-                  "is_verified", "verified_via", "verification_missing",
-                  "verification_withdrawn", "verified_by_name",
-                  "verified_at"]
+                  "is_verified", "verified_via", "verification_status",
+                  "verification_note", "verification_missing",
+                  "verification_withdrawn", "profile_percent",
+                  "profile_steps", "verified_by_name", "verified_at"]
         read_only_fields = ["verified_at"]
 
     def get_verification_withdrawn(self, obj) -> bool:

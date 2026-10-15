@@ -208,17 +208,16 @@ class Membership(TenantScopedModel, TimeStampedModel):
     bank_code = models.CharField(max_length=10, blank=True)
     bank_account_no = models.CharField(max_length=20, blank=True)
 
-    # The verified badge. A member earns it automatically by completing their
-    # profile and uploading a means of ID (see ``is_verified``), or an officer
-    # grants it outright. Only the officer's decision is stored; the automatic
-    # part is computed on read, so deleting the ID or blanking a field takes
-    # the badge away again without every write path having to remember to.
+    # The verified badge. Only an officer gives it. Completing the profile
+    # (see ``verification_status``) puts the member in the officers' review
+    # queue; that part is computed on read, so it can never drift from the
+    # profile and documents it describes.
     class Verification(models.TextChoices):
-        AUTOMATIC = "", "Automatic"
+        AUTOMATIC = "", "Not decided"
         OFFICER = "officer", "Verified by an officer"
-        # An officer took the badge away: it stays off, however complete the
-        # profile, until an officer verifies the member again.
-        REVOKED = "revoked", "Withdrawn by an officer"
+        # An officer declined or withdrew it. The member sees the officer's
+        # note; updating their profile puts them back in the review queue.
+        REVOKED = "revoked", "Declined by an officer"
 
     verification = models.CharField(
         max_length=10, choices=Verification.choices, blank=True, default="")
@@ -226,6 +225,9 @@ class Membership(TenantScopedModel, TimeStampedModel):
         User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="+")
     verified_at = models.DateTimeField(null=True, blank=True)
+    # The officer's reason when declining or withdrawing — shown to the
+    # member, so "the ID photo is unreadable" tells them what to fix.
+    verification_note = models.CharField(max_length=255, blank=True)
 
     class Meta:
         constraints = [
@@ -248,50 +250,90 @@ class Membership(TenantScopedModel, TimeStampedModel):
         """A full member: may vote, hold office and receive dividends."""
         return self.kind == self.Kind.MEMBER
 
-    # What "a completed profile" means for the badge, as (label, check) pairs.
-    # Bank details are left out on purpose: they are about paying the member,
-    # not about who the member is.
-    PROFILE_REQUIREMENTS = (
-        ("Full name", lambda m: m.user.full_name),
-        ("Phone number", lambda m: m.user.phone),
-        ("Photo", lambda m: m.photo),
-        ("Date of birth", lambda m: m.date_of_birth),
-        ("Gender", lambda m: m.gender),
-        ("Address", lambda m: m.address),
-        ("Occupation", lambda m: m.occupation),
-        ("Next of kin", lambda m: m.next_of_kin_name),
-        ("Next of kin's phone", lambda m: m.next_of_kin_phone),
+    # A complete profile, as steps the member works through. Each requirement
+    # is (label, check). Bank details are left out on purpose: they are about
+    # paying the member, not about who the member is.
+    PROFILE_STEPS = (
+        ("details", "Personal details", (
+            ("Full name", lambda m: m.user.full_name),
+            ("Phone number", lambda m: m.user.phone),
+            ("Date of birth", lambda m: m.date_of_birth),
+            ("Gender", lambda m: m.gender),
+            ("Occupation", lambda m: m.occupation),
+        )),
+        ("contact", "Address & next of kin", (
+            ("Address", lambda m: m.address),
+            ("Next of kin", lambda m: m.next_of_kin_name),
+            ("Next of kin's phone", lambda m: m.next_of_kin_phone),
+        )),
+        # The profile picture, or a passport photograph uploaded as a document:
+        # members reasonably read "photo" as either, and both show their face.
+        ("photo", "Photo", (
+            ("Photo", lambda m: m.photo or m.has_passport_photo),
+        )),
+        ("id", "Means of ID", (
+            ("Means of ID document", lambda m: m.has_id_document),
+        )),
     )
+
+    def _has_document(self, doc_type, listed_attr) -> bool:
+        listed = getattr(self, listed_attr, None)
+        if listed is not None:
+            return listed
+        return self.documents.filter(doc_type=doc_type).exists()
 
     @property
     def has_id_document(self) -> bool:
-        listed = getattr(self, "listed_has_id_document", None)
-        if listed is not None:
-            return listed
-        return self.documents.filter(
-            doc_type=MemberDocument.DocType.ID).exists()
+        return self._has_document(MemberDocument.DocType.ID,
+                                  "listed_has_id_document")
+
+    @property
+    def has_passport_photo(self) -> bool:
+        return self._has_document(MemberDocument.DocType.PASSPORT,
+                                  "listed_has_passport_photo")
+
+    @property
+    def profile_steps(self) -> list[dict]:
+        steps = []
+        for key, label, requirements in self.PROFILE_STEPS:
+            missing = [name for name, present in requirements
+                       if not present(self)]
+            steps.append({"key": key, "label": label, "done": not missing,
+                          "missing": missing})
+        return steps
+
+    @property
+    def profile_percent(self) -> int:
+        total = sum(len(reqs) for _, _, reqs in self.PROFILE_STEPS)
+        missing = len(self.verification_missing)
+        return round(100 * (total - missing) / total)
 
     @property
     def verification_missing(self) -> list[str]:
-        """What the member still has to supply to be verified automatically."""
-        missing = [label for label, present in self.PROFILE_REQUIREMENTS
-                   if not present(self)]
-        if not self.has_id_document:
-            missing.append("Means of ID document")
-        return missing
+        """Everything still needed before an officer can review the member."""
+        return [name for step in self.profile_steps for name in step["missing"]]
+
+    @property
+    def verification_status(self) -> str:
+        """``verified`` | ``withdrawn`` | ``awaiting`` | ``incomplete``.
+
+        Completing the profile does not verify anyone: software never looks
+        at the uploaded ID. It puts the member in the officers' queue
+        (``awaiting``), and only an officer's decision gives the badge.
+        """
+        if self.verification == self.Verification.OFFICER:
+            return "verified"
+        if self.verification == self.Verification.REVOKED:
+            return "withdrawn"
+        return "incomplete" if self.verification_missing else "awaiting"
 
     @property
     def verified_via(self) -> str | None:
-        """``"officer"``, ``"profile"``, or None when not verified."""
-        if self.verification == self.Verification.OFFICER:
-            return "officer"
-        if self.verification == self.Verification.REVOKED:
-            return None
-        return "profile" if not self.verification_missing else None
+        return "officer" if self.is_verified else None
 
     @property
     def is_verified(self) -> bool:
-        return self.verified_via is not None
+        return self.verification == self.Verification.OFFICER
 
     @property
     def savings_balance(self):
@@ -336,6 +378,9 @@ class Membership(TenantScopedModel, TimeStampedModel):
                      .values("n"))
         id_documents = MemberDocument.all_objects.filter(
             membership=OuterRef("pk"), doc_type=MemberDocument.DocType.ID)
+        passport_photos = MemberDocument.all_objects.filter(
+            membership=OuterRef("pk"),
+            doc_type=MemberDocument.DocType.PASSPORT)
         return qs.annotate(
             listed_balance=Coalesce(Subquery(balance, output_field=money),
                                     Value(0), output_field=money),
@@ -344,6 +389,7 @@ class Membership(TenantScopedModel, TimeStampedModel):
                 Value(0)),
             # So the verified badge costs no query per row either.
             listed_has_id_document=Exists(id_documents),
+            listed_has_passport_photo=Exists(passport_photos),
         )
 
 
