@@ -12,6 +12,10 @@ from accounts.member_views import (
 from accounts.auth_views import (
     LoginView, PasswordResetConfirmView, PasswordResetRequestView,
 )
+from accounts.data_rights_views import (
+    DeletionRequestViewSet, MyDataExportView, MyDeletionRequestView,
+    PublicDeletionConfirmView, PublicDeletionRequestView,
+)
 from accounts.join_views import (
     CooperativeApplicationView, JoinLinkView, JoinRequestCreateView,
     JoinRequestViewSet,
@@ -103,6 +107,8 @@ router.register("loan-repayments", LoanRepaymentViewSet,
                 basename="loan-repayment")
 router.register("approvals", ApprovalRequestViewSet, basename="approval")
 router.register("join-requests", JoinRequestViewSet, basename="join-request")
+router.register("deletion-requests", DeletionRequestViewSet,
+                basename="deletion-request")
 
 # Member self-service (scoped to the requesting member's own records)
 router.register("me/documents", MemberDocumentSelfViewSet,
@@ -164,6 +170,12 @@ urlpatterns = [
          PublicSubdivisionsView.as_view(), name="public-subdivisions"),
     path("public/societies/", PublicSocietySearchView.as_view(),
          name="public-societies"),
+    # Account deletion without the app — the URL Google Play is given.
+    path("public/account-deletion/", PublicDeletionRequestView.as_view(),
+         name="public-account-deletion"),
+    path("public/account-deletion/confirm/",
+         PublicDeletionConfirmView.as_view(),
+         name="public-account-deletion-confirm"),
     path("public/apply/", CooperativeApplicationView.as_view(),
          name="public-apply"),
     path("public/join/", JoinRequestCreateView.as_view(),
@@ -179,6 +191,10 @@ urlpatterns = [
     path("public/invoice/<str:pay_token>/", InvoicePayView.as_view(),
          name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
+    # A person's own data: a copy of all of it, and asking for deletion.
+    path("me/data-export/", MyDataExportView.as_view(), name="me-data-export"),
+    path("me/deletion-request/", MyDeletionRequestView.as_view(),
+         name="me-deletion-request"),
     path("fee-quote/", FeeQuoteView.as_view(), name="fee-quote"),
     path("webhooks/paystack/", PaystackWebhookView.as_view(),
          name="webhook-paystack"),

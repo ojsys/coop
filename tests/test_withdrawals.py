@@ -160,6 +160,8 @@ def test_cash_is_paid_out_of_the_cash_account(coop, saver):
 
 def test_the_maker_cannot_approve_their_own_withdrawal(coop, saver):
     maker = _officer(coop, "maker@imole.coop")
+    # A second officer exists, so the sole-Secretary exemption does not apply.
+    _officer(coop, "checker@imole.coop", slug=Role.TREASURER)
     _, approval = _ask(coop, saver, "4000", maker)
 
     with pytest.raises(ApprovalError):

@@ -127,6 +127,8 @@ def test_the_profile_patch_can_no_longer_write_bank_details(coop):
 # ── Approving ───────────────────────────────────────────────────────────────
 def test_the_maker_cannot_approve_their_own_change(coop):
     maker = _officer(coop, "maker@imole.coop")
+    # A second officer exists, so the sole-Secretary exemption does not apply.
+    _officer(coop, "checker@imole.coop", slug=Role.TREASURER)
     client = _client(maker)
     _propose(client, coop)
     approval_id = _pending_approval_id(client, coop)

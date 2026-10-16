@@ -26,7 +26,8 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 
-from accounts.models import JoinRequest, MemberDocument, Membership, User
+from accounts.models import (AccountDeletionRequest, JoinRequest,
+                             MemberDocument, Membership, User)
 from approvals.models import ApprovalRequest
 from audit.models import AuditLog
 from communications.models import Announcement, ChannelPreference, Notification
@@ -168,6 +169,8 @@ def dataset(coop, member, dues_type, member_funds):
             full_name="Tunde Bello", email="tunde@example.com",
             phone="08031111111", message="I was introduced by my cousin.",
         )
+        AccountDeletionRequest.objects.create(user=member.user,
+                                              reason="Moving abroad")
         # Unpaid on purpose: a requested-but-unapproved payout is the state the
         # read-only admin screen exists to show.
         Withdrawal.objects.create(

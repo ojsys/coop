@@ -27,7 +27,8 @@ from django.db.models.functions import Coalesce
 from django.utils.html import format_html
 
 from accounts.models import (
-    JoinRequest, MemberDocument, Membership, Role, User,
+    AccountDeletionRequest, JoinRequest, MemberDocument, Membership, Role,
+    User,
 )
 from core.admin import (TenantScopedModelAdmin, TenantScopedTabularInline,
                         TwoFactorRequiredMixin)
@@ -430,6 +431,35 @@ class JoinRequestAdmin(TenantScopedModelAdmin):
 
     def has_add_permission(self, request):
         # Requests arrive from the public join form.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AccountDeletionRequest)
+class AccountDeletionRequestAdmin(admin.ModelAdmin):
+    """A viewer, not an editor — for the platform team checking the 30-day
+    promise across societies.
+
+    Completing a deletion erases personal data in every society the person
+    belongs to, after checking nothing is owed; that lives in
+    accounts.data_rights and is done from the console's Deletion requests.
+    Flipping `status` here would mark someone deleted without deleting them.
+    """
+
+    list_display = ("user", "status", "source", "created_at",
+                    "completed_at", "completed_by")
+    list_filter = ("status", "source", "created_at")
+    search_fields = ("user__full_name", "user__email", "reason")
+    date_hierarchy = "created_at"
+    ordering = ("-created_at",)
+    list_select_related = ("user", "completed_by")
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(f.name for f in self.model._meta.fields)
+
+    def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):

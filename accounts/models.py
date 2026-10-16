@@ -422,3 +422,4 @@ class MemberDocument(TenantScopedModel, TimeStampedModel):
 # Django's app registry only discovers models reachable from <app>/models.py —
 # without this line the model exists but no migration is ever generated for it.
 from accounts.join_models import JoinRequest  # noqa: E402,F401
+from accounts.data_rights_models import AccountDeletionRequest  # noqa: E402,F401,I001
