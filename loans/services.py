@@ -820,7 +820,6 @@ def initiate_loan_repayment(loan, *, amount, reference, channel="psp"):
         psp_reference=reference)
 
 
-@transaction.atomic
 def _provider_receipt(reference):
     """Ask Paystack for the fee and split on a charge. Best effort: with no
     answer the repayment is still booked, to the wallet with no fee."""
@@ -833,13 +832,20 @@ def _provider_receipt(reference):
         return None
 
 
+@transaction.atomic
 def confirm_loan_repayment(repayment, *, actor=None, receipt=None):
     """Settle a PENDING repayment once its payment is verified: posts the ledger,
     allocates to the schedule and notifies the member. Idempotent.
 
     ``receipt`` is the provider's account of an online payment (fee, and
     whether it was split to a subaccount); callers that already asked pass it,
-    otherwise it is fetched here."""
+    otherwise it is fetched here.
+
+    Must stay atomic: the row lock below is only legal inside a transaction.
+    SQLite ignores select_for_update, so the tests could not see it when the
+    decorator ended up on the wrong function — but production's database
+    refused every online repayment confirmation with a 500.
+    """
     from loans.models import LoanRepayment
     if repayment.status == LoanRepayment.Status.CONFIRMED:
         return repayment
