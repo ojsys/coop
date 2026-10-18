@@ -335,3 +335,118 @@ def test_the_approvals_queue_also_pays_out(funded, banked, product, stub):
     loan.refresh_from_db()
     assert loan.status == Loan.Status.DISBURSED
     assert Payout.all_objects.count() == 1
+
+
+# ── A short wallet: nothing leaves, and the officer is asked to fund it ─────
+@pytest.fixture
+def underfunded(coop):
+    """₦30,000 in the wallet — less than the ₦100,000 loan."""
+    wallet = _acct(coop, "1020", "Disbursement Wallet", Account.Kind.ASSET)
+    settle = _acct(coop, "1010", "Bank / PSP Settlement", Account.Kind.ASSET)
+    with use_tenant(coop):
+        post_journal(cooperative=coop, reference="TEST-FUND", memo="fund",
+                    lines=[Line(account=wallet, debit=Decimal("30000.00")),
+                           Line(account=settle, credit=Decimal("30000.00"))])
+    return coop
+
+
+def test_a_short_wallet_sends_nothing_at_all(underfunded, banked, product,
+                                             stub):
+    """Not a part payment, not a provider call, not a journal."""
+    stub.sent = None
+    loan = _apply(underfunded, banked, product)
+    entries_before = LedgerEntry.all_objects.count()
+
+    with use_tenant(underfunded):
+        approve_loan(loan, actor=_officer(underfunded), approve=True)
+
+    loan.refresh_from_db()
+    assert loan.status == Loan.Status.APPROVED
+    assert stub.sent is None
+    assert Payout.all_objects.count() == 0
+    assert LedgerEntry.all_objects.count() == entries_before
+    assert wallet_balance(underfunded) == Decimal("30000.00")
+
+
+def test_the_approve_endpoint_says_how_much_to_fund(underfunded, banked,
+                                                    product, stub):
+    loan = _apply(underfunded, banked, product)
+
+    resp = _client(_officer(underfunded)).post(
+        f"/api/v1/loans/{loan.id}/approve/", **_h(underfunded))
+
+    assert resp.status_code == 200, resp.content
+    body = resp.json()
+    assert body["status"] == "approved"
+    short = body["wallet_shortfall"]
+    assert (short["available"], short["needed"], short["shortfall"]) == (
+        "30000.00", "100000.00", "70000.00")
+    assert "₦70,000.00" in body["auto_disbursement_error"]
+
+
+def test_funding_the_suggested_amount_covers_the_loan(underfunded, banked,
+                                                      product, stub):
+    """The suggestion allows for Paystack's fee, so following it is enough."""
+    from payments.fees import paystack_fee
+
+    loan = _apply(underfunded, banked, product)
+    resp = _client(_officer(underfunded)).post(
+        f"/api/v1/loans/{loan.id}/approve/", **_h(underfunded))
+
+    fund = Decimal(resp.json()["wallet_shortfall"]["fund_at_least"])
+    credited = fund - paystack_fee(fund)
+    assert Decimal("30000.00") + credited >= loan.amount_to_disburse
+
+
+def test_officers_are_told_to_fund_the_wallet(underfunded, banked, product,
+                                              stub):
+    from communications.models import Notification
+
+    loan = _apply(underfunded, banked, product)
+    with use_tenant(underfunded):
+        approve_loan(loan, actor=_officer(underfunded), approve=True)
+
+    titles = list(Notification.all_objects.values_list("title", flat=True))
+    assert "Fund the disbursement wallet" in titles
+
+
+def test_paying_later_from_a_short_wallet_is_refused(underfunded, banked,
+                                                     product, stub):
+    loan = _apply(underfunded, banked, product)
+    officer = _officer(underfunded)
+    with use_tenant(underfunded):
+        approve_loan(loan, actor=officer, approve=True)
+
+    resp = _client(officer).post(
+        f"/api/v1/loans/{loan.id}/pay-electronically/", **_h(underfunded))
+
+    assert resp.status_code == 400, resp.content
+    assert resp.json()["code"] == "wallet_short"
+    assert resp.json()["wallet_shortfall"]["shortfall"] == "70000.00"
+    assert Payout.all_objects.count() == 0
+    loan.refresh_from_db()
+    assert loan.status == Loan.Status.APPROVED
+
+
+def test_the_approvals_queue_reports_a_short_wallet(underfunded, banked,
+                                                    product, stub):
+    from approvals.models import ApprovalRequest
+    from approvals.services import submit_request
+
+    loan = _apply(underfunded, banked, product)
+    maker = _officer(underfunded, "maker@imole.coop")
+    checker = _officer(underfunded, "checker@imole.coop")
+    with use_tenant(underfunded):
+        request_obj = submit_request(
+            cooperative=underfunded,
+            action=ApprovalRequest.Action.LOAN_APPROVE,
+            object_id=loan.id, requested_by=maker)
+
+    resp = _client(checker).post(
+        f"/api/v1/approvals/{request_obj.id}/approve/", **_h(underfunded))
+
+    assert resp.status_code == 200, resp.content
+    outcome = resp.json()["outcome"]
+    assert outcome["wallet_shortfall"]["shortfall"] == "70000.00"
+    assert "Fund the wallet" in outcome["message"]
+    assert Payout.all_objects.count() == 0

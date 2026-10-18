@@ -52,8 +52,11 @@ class ApprovalRequestViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
             decide_request(req, actor=request.user, approve=approve)
         except ApprovalError as exc:
             return Response({"detail": str(exc)}, status=400)
+        outcome = getattr(req, "outcome", None)
         req.refresh_from_db()
-        return Response(self.get_serializer(req).data)
+        data = self.get_serializer(req).data
+        data["outcome"] = outcome
+        return Response(data)
 
     @action(detail=False, methods=["get"])
     def policy(self, request):

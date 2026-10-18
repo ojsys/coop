@@ -99,10 +99,14 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         # Read the transient attributes before refresh_from_db discards them.
         payout = getattr(loan, "auto_disbursement", None)
         error = getattr(loan, "auto_disbursement_error", None)
+        shortfall = getattr(loan, "auto_disbursement_shortfall", None)
 
         loan.refresh_from_db()
         data = self.get_serializer(loan).data
         data["auto_disbursement_error"] = error
+        # Set only when the wallet was the reason: the console then asks the
+        # officer to fund it, with the amount, instead of a generic warning.
+        data["wallet_shortfall"] = shortfall
         data["payout_reference"] = payout.reference if payout else None
         return Response(data)
 
@@ -129,13 +133,18 @@ class LoanViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         could not: approved before that existed, or approved when the wallet was
         short or the bank code missing.
         """
-        from loans.services import disburse_loan_electronically
+        from loans.services import (disburse_loan_electronically,
+                                    wallet_short_detail)
         from payments.providers import PaymentInitError
-        from payments.services import PayoutError
+        from payments.services import PayoutError, WalletShortError
 
         loan = self.get_object()
         try:
             payout = disburse_loan_electronically(loan, actor=request.user)
+        except WalletShortError as exc:
+            return Response({"detail": str(exc), "code": "wallet_short",
+                             "wallet_shortfall": wallet_short_detail(exc)},
+                            status=400)
         except (LoanError, PayoutError) as exc:
             return Response({"detail": str(exc)}, status=400)
         except PaymentInitError as exc:

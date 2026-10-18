@@ -146,8 +146,12 @@ def decide_request(request_obj, *, actor, approve):
     if self_decided and not is_sole_secretary(request_obj.cooperative, actor):
         raise ApprovalError("A different officer must approve this request.")
 
+    # What the action itself reported, for the approver to see — e.g. a loan
+    # approved but not paid because the wallet is short. Transient, like the
+    # loan's own auto_disbursement_error: the ledger is the durable record.
+    request_obj.outcome = None
     if approve:
-        _execute(request_obj, actor)
+        request_obj.outcome = _execute(request_obj, actor)
         request_obj.status = ApprovalRequest.Status.APPROVED
     else:
         request_obj.status = ApprovalRequest.Status.REJECTED
@@ -175,7 +179,13 @@ def _execute(request_obj, actor):
                          request_obj.object_id)
     if request_obj.action == ApprovalRequest.Action.LOAN_APPROVE:
         from loans.services import approve_loan
-        approve_loan(target, actor=actor, approve=True)
+        loan = approve_loan(target, actor=actor, approve=True)
+        if loan.auto_disbursement_error:
+            return {"message": loan.auto_disbursement_error,
+                    "wallet_shortfall": loan.auto_disbursement_shortfall}
+        if loan.auto_disbursement is not None:
+            return {"message": "Approved and paid to the member's bank.",
+                    "wallet_shortfall": None}
     elif request_obj.action == ApprovalRequest.Action.LOAN_DISBURSE:
         from loans.services import disburse_loan
         disburse_loan(target, actor=actor)

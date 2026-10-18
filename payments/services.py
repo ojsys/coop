@@ -44,6 +44,26 @@ class PayoutError(Exception):
     """Money could not be sent out."""
 
 
+class WalletShortError(PayoutError):
+    """The disbursement wallet holds less than the payout needs.
+
+    Its own type, carrying the figures, because it is the one refusal an
+    officer fixes by funding the wallet rather than by changing the payout —
+    so the console can say exactly how much to add and link to the top-up.
+    """
+
+    def __init__(self, *, available, needed):
+        self.available = available
+        self.needed = needed
+        self.shortfall = needed - available
+        super().__init__(
+            f"Not paid: the disbursement wallet holds \u20a6{available:,.2f}, "
+            f"which is \u20a6{self.shortfall:,.2f} short of the "
+            f"\u20a6{needed:,.2f} this payout needs. Fund the wallet with at "
+            f"least \u20a6{self.shortfall:,.2f}, then pay it."
+        )
+
+
 # ── What the provider says actually happened ─────────────────────────────────
 # A transfer being *accepted* is not the same as it settling. Paystack can fail
 # or reverse one afterwards, and its webhook can be missed or delayed — so a
@@ -305,12 +325,18 @@ def send_payout(*, cooperative, amount, debit_account, kind, object_id=None,
             "from the list, or pay it in cash."
         )
 
+    # One payout at a time per society. The balance is derived from the
+    # ledger, so without a lock two payouts in flight together could each read
+    # the same balance, each pass, and between them send more than the wallet
+    # holds. Locking the society's row makes the second wait until the first
+    # has posted its journal, and then see the lower balance.
+    from tenants.models import Cooperative
+
+    Cooperative.objects.select_for_update().filter(pk=cooperative.pk).first()
+
     available = wallet_balance(cooperative)
     if amount > available:
-        raise PayoutError(
-            f"The disbursement wallet holds {available:,.2f}, so {amount:,.2f} "
-            f"cannot be sent. Fund the wallet first."
-        )
+        raise WalletShortError(available=available, needed=amount)
 
     wallet, _, _ = _wallet_accounts(cooperative)
     if debit_account.cooperative_id != cooperative.id:

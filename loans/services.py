@@ -166,6 +166,7 @@ def approve_loan(loan, *, actor=None, approve=True, auto_disburse=True):
 
     loan.auto_disbursement = None
     loan.auto_disbursement_error = None
+    loan.auto_disbursement_shortfall = None
     if not (approve and auto_disburse):
         return loan
 
@@ -181,7 +182,7 @@ def approve_loan(loan, *, actor=None, approve=True, auto_disburse=True):
         return loan
 
     from payments.providers import PaymentInitError
-    from payments.services import PayoutError
+    from payments.services import PayoutError, WalletShortError
 
     try:
         loan.auto_disbursement = disburse_loan_electronically(loan, actor=actor)
@@ -190,14 +191,44 @@ def approve_loan(loan, *, actor=None, approve=True, auto_disburse=True):
         # paid another way. Officers are told, because an approved loan nobody
         # noticed could not be paid is how a member ends up waiting silently.
         loan.auto_disbursement_error = str(exc)
-        _notify_officers(
-            loan.cooperative,
-            title="Loan approved but not yet paid",
-            body=(f"Loan {loan.id} for {loan.membership.user.full_name} was "
-                  f"approved but could not be paid out automatically:\n\n"
-                  f"{exc}\n\nIt is waiting as an approved loan."),
-        )
+        if isinstance(exc, WalletShortError):
+            # Nothing left the wallet. Say so first, and say how much to add.
+            loan.auto_disbursement_shortfall = wallet_short_detail(exc)
+            _notify_officers(
+                loan.cooperative,
+                title="Fund the disbursement wallet",
+                body=(f"Loan {loan.id} for {loan.membership.user.full_name} was "
+                      f"approved but not paid, because the disbursement wallet "
+                      f"is short.\n\n{exc}\n\nTop up the wallet from the "
+                      f"console (Wallet \u2192 Fund wallet), then pay the loan "
+                      f"from Loans \u2192 Awaiting payment."),
+            )
+        else:
+            _notify_officers(
+                loan.cooperative,
+                title="Loan approved but not yet paid",
+                body=(f"Loan {loan.id} for {loan.membership.user.full_name} was "
+                      f"approved but could not be paid out automatically:\n\n"
+                      f"{exc}\n\nIt is waiting as an approved loan."),
+            )
     return loan
+
+
+def wallet_short_detail(exc) -> dict:
+    """The figures an officer needs to fund the wallet, as API-ready strings.
+
+    ``fund_at_least`` is the shortfall grossed up for Paystack's fee: a top-up
+    is credited net of it, so funding exactly the shortfall would leave the
+    wallet still a little short and the loan still unpaid.
+    """
+    from payments.fees import gross_up
+
+    return {
+        "available": f"{exc.available:.2f}",
+        "needed": f"{exc.needed:.2f}",
+        "shortfall": f"{exc.shortfall:.2f}",
+        "fund_at_least": f"{gross_up(exc.shortfall):.2f}",
+    }
 
 
 def build_schedule(loan):
