@@ -603,6 +603,13 @@ def _allocate(loan, amount) -> Decimal:
     split into interest and principal in proportion to its scheduled split, so
     the ledger can book interest income as it is earned. Principal is then the
     remainder (``amount - interest``), keeping the journal exactly balanced.
+
+    The interest share is the instalment's interest earned *so far* less what
+    was earned before this payment, each rounded, rather than each payment's
+    share rounded on its own. Members repay in small amounts whenever they
+    have money, and a hundred separately-rounded shares drift by kobo from
+    the instalment's interest; this way a fully paid instalment has always
+    booked exactly its interest, however it was paid.
     """
     from loans.models import RepaymentInstalment
 
@@ -617,8 +624,11 @@ def _allocate(loan, amount) -> Decimal:
             break
         pay = min(inst.outstanding, remaining)
         if inst.amount_due > ZERO:
-            interest_total += (inst.interest_component * pay
-                               / inst.amount_due).quantize(Decimal("0.01"))
+            def earned(paid):
+                return (inst.interest_component * paid
+                        / inst.amount_due).quantize(Decimal("0.01"))
+            interest_total += (earned(inst.amount_paid + pay)
+                               - earned(inst.amount_paid))
         inst.amount_paid += pay
         remaining -= pay
         if inst.outstanding <= ZERO:

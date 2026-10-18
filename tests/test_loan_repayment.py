@@ -398,3 +398,57 @@ def test_a_repayment_after_an_online_one_posts(coop, member, product):
         record_repayment(loan, amount="27500")
         assert LoanRepayment.all_objects.filter(
             loan=loan, status=LoanRepayment.Status.CONFIRMED).count() == 2
+
+
+def test_small_payments_any_time_finish_the_loan_early(coop, member, product):
+    """Trickle repayments: any amount, any day, spread over instalments.
+
+    Interest is a flat charge, so paying in small amounts neither adds nor
+    saves interest; the money just clears instalments in order, and the loan
+    is repaid as soon as the total is in, ahead of the schedule. The ledger
+    must book exactly the loan's interest, however the payments were split,
+    and leave nothing on the member's receivable."""
+    from ledger.models import Account, LedgerEntry
+    from django.db.models import Sum
+
+    loan = _disbursed_loan(coop, member, product, "100000", term=4)
+    # 110,000 repayable, in awkward amounts that never line up with the
+    # 27,500 instalments.
+    amounts = ["1000", "333.33", "2500", "777.77"] * 30   # 138,333.00 > total
+    paid = Decimal("0")
+    with use_tenant(coop):
+        for a in amounts:
+            loan.refresh_from_db()
+            if loan.status == Loan.Status.REPAID:
+                break
+            a = min(Decimal(a), loan.outstanding)
+            record_repayment(loan, amount=a)
+            paid += a
+        loan.refresh_from_db()
+        rows = list(RepaymentInstalment.objects.filter(loan=loan))
+
+        def booked(code, side):
+            acct = Account.all_objects.get(cooperative=coop, code=code)
+            return (LedgerEntry.all_objects.filter(
+                account=acct, journal__reference__contains="-RPY-")
+                .aggregate(s=Sum(side))["s"] or Decimal("0"))
+
+    assert paid == Decimal("110000.00")
+    assert loan.status == Loan.Status.REPAID and loan.outstanding == 0
+    assert all(r.status == RepaymentInstalment.Status.PAID for r in rows)
+    # Exactly the flat interest, and the whole principal off the receivable.
+    assert booked("4100", "credit") == Decimal("10000.00")
+    assert booked("1200", "credit") == Decimal("100000.00")
+    assert trial_balance(coop)["balanced"]
+
+
+def test_a_part_payment_shows_on_the_instalment(coop, member, product):
+    loan = _disbursed_loan(coop, member, product, "100000", term=4)
+    with use_tenant(coop):
+        record_repayment(loan, amount="30000")   # one and a bit
+        rows = list(RepaymentInstalment.objects.filter(loan=loan)
+                    .order_by("sequence"))
+    assert rows[0].status == RepaymentInstalment.Status.PAID
+    assert rows[1].amount_paid == Decimal("2500.00")
+    assert rows[1].outstanding == Decimal("25000.00")
+    assert rows[1].status == RepaymentInstalment.Status.PENDING
