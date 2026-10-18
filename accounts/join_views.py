@@ -11,10 +11,13 @@ from __future__ import annotations
 from django.http import Http404
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.views import APIView
 
 from accounts.join_models import JoinRequest
+from accounts.models import User
 from accounts.join_services import (
     SignupError, apply_for_cooperative, approve_join_request,
     reject_join_request, request_to_join,
@@ -174,13 +177,20 @@ class JoinRequestSerializer(serializers.ModelSerializer):
                                             read_only=True, default=None)
     member_no = serializers.CharField(source="membership.member_no",
                                       read_only=True, default=None)
+    # Someone already on CooperativeOS (a member of another society, say)
+    # signs in with the account they have; approving just adds this society.
+    has_account = serializers.SerializerMethodField()
 
     class Meta:
         model = JoinRequest
         fields = ["id", "full_name", "email", "phone", "message", "status",
                   "decision_note", "decided_by_name", "decided_at",
-                  "member_no", "created_at"]
+                  "member_no", "has_account", "created_at"]
         read_only_fields = fields
+
+    def get_has_account(self, obj) -> bool:
+        return User.objects.filter(email__iexact=obj.email,
+                                   is_active=True).exists()
 
 
 class JoinRequestViewSet(TenantScopedViewMixin,
@@ -212,9 +222,12 @@ class JoinRequestViewSet(TenantScopedViewMixin,
         except SignupError as exc:
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 
+        told = ("They've been emailed to say they can switch to this "
+                "society from their account."
+                if membership.user.has_usable_password() else
+                "They've been emailed a link to set their password.")
         return Response({
-            "detail": f"{membership.user.full_name} has been admitted. "
-                      "They've been emailed a link to set their password.",
+            "detail": f"{membership.user.full_name} has been admitted. {told}",
             "membership": membership.id,
         })
 
@@ -228,3 +241,111 @@ class JoinRequestViewSet(TenantScopedViewMixin,
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 
         return Response({"detail": "The request has been declined."})
+
+
+# ── The signed-in person: joining another society ───────────────────────────
+class MyJoinRequestSerializer(serializers.ModelSerializer):
+    cooperative_id = serializers.IntegerField(source="cooperative.id")
+    cooperative_name = serializers.CharField(source="cooperative.name")
+    cooperative_logo = serializers.ImageField(source="cooperative.logo",
+                                              read_only=True)
+
+    class Meta:
+        model = JoinRequest
+        fields = ["id", "cooperative_id", "cooperative_name",
+                  "cooperative_logo", "status", "decision_note", "message",
+                  "created_at", "decided_at"]
+        read_only_fields = fields
+
+
+class MyJoinRequestCreateSerializer(serializers.Serializer):
+    """The society by id (picked from the search) or by invite code/link."""
+
+    cooperative = serializers.IntegerField(required=False)
+    code = serializers.CharField(max_length=300, required=False,
+                                 allow_blank=True)
+    message = serializers.CharField(max_length=500, required=False,
+                                    allow_blank=True, default="")
+
+    def validate(self, attrs):
+        societies = Cooperative.objects.filter(
+            status=Cooperative.Status.ACTIVE)
+        code = (attrs.get("code") or "").strip().rstrip("/")
+        if attrs.get("cooperative"):
+            society = societies.filter(pk=attrs["cooperative"]).first()
+        elif code:
+            # A pasted invite link works as well as the bare code.
+            code = code.rsplit("/join/", 1)[-1].split("?")[0].strip("/")
+            society = societies.filter(join_code__iexact=code,
+                                       join_link_enabled=True).first()
+        else:
+            raise serializers.ValidationError(
+                {"cooperative": ["Choose a cooperative to join."]})
+        if society is None:
+            raise serializers.ValidationError(
+                {"cooperative": ["We couldn't find that cooperative, or it "
+                                 "isn't accepting requests."]})
+        attrs["society"] = society
+        return attrs
+
+
+class MyJoinRequestsView(APIView):
+    """`/me/join-requests/` — ask another society to admit you, with the
+    account you already have.
+
+    GET lists your requests (waiting, and recently declined); POST files one
+    from your own name, email and phone, so there is nothing to retype and no
+    second account. Officers decide it in the same queue as any other request;
+    approving adds a membership to this account, and the society appears in
+    your switcher.
+    """
+
+    permission_classes = [IsAuthenticated]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "signup"
+
+    def get_throttles(self):
+        # Only filing a request costs officers' time and sends mail.
+        return super().get_throttles() if self.request.method == "POST" else []
+
+    def _mine(self, request):
+        return (JoinRequest.all_objects
+                .filter(email__iexact=request.user.email)
+                .exclude(status=JoinRequest.Status.APPROVED)
+                .select_related("cooperative").order_by("-created_at"))
+
+    def get(self, request):
+        return Response(MyJoinRequestSerializer(
+            self._mine(request)[:20], many=True,
+            context={"request": request}).data)
+
+    def post(self, request):
+        serializer = MyJoinRequestCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        user = request.user
+        try:
+            join_request = request_to_join(
+                cooperative=data["society"], full_name=user.full_name,
+                email=user.email, phone=user.phone or "",
+                message=data["message"])
+        except SignupError as exc:
+            raise serializers.ValidationError({"detail": [str(exc)]}) from exc
+        return Response(MyJoinRequestSerializer(
+            join_request, context={"request": request}).data,
+            status=status.HTTP_201_CREATED)
+
+
+class MyJoinRequestDetailView(APIView):
+    """`DELETE /me/join-requests/<id>/` — withdraw a request still waiting."""
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, pk):
+        join_request = JoinRequest.all_objects.filter(
+            pk=pk, email__iexact=request.user.email,
+            status=JoinRequest.Status.PENDING).first()
+        if join_request is None:
+            raise Http404
+        join_request.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)

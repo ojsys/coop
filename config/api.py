@@ -18,7 +18,7 @@ from accounts.data_rights_views import (
 )
 from accounts.join_views import (
     CooperativeApplicationView, JoinLinkView, JoinRequestCreateView,
-    JoinRequestViewSet,
+    JoinRequestViewSet, MyJoinRequestDetailView, MyJoinRequestsView,
     PublicSocietySearchView,
 )
 from accounts.views import (
@@ -195,6 +195,11 @@ urlpatterns = [
     path("me/data-export/", MyDataExportView.as_view(), name="me-data-export"),
     path("me/deletion-request/", MyDeletionRequestView.as_view(),
          name="me-deletion-request"),
+    # Joining another society with the account you already have.
+    path("me/join-requests/", MyJoinRequestsView.as_view(),
+         name="me-join-requests"),
+    path("me/join-requests/<int:pk>/", MyJoinRequestDetailView.as_view(),
+         name="me-join-request"),
     path("fee-quote/", FeeQuoteView.as_view(), name="fee-quote"),
     path("webhooks/paystack/", PaystackWebhookView.as_view(),
          name="webhook-paystack"),

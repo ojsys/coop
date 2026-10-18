@@ -241,6 +241,23 @@ def send_welcome_email(membership) -> bool:
     """
     user = membership.user
     cooperative = membership.cooperative
+    if user.has_usable_password():
+        # Already on CooperativeOS (a member of another society): nothing to
+        # set up. They sign in as usual and switch to this society.
+        return send_branded_email(
+            to=user.email,
+            subject=f"Welcome to {cooperative.name}",
+            template="emails/welcome.html",
+            cooperative=cooperative,
+            context={
+                "full_name": user.full_name,
+                "member_no": membership.member_no,
+                "existing_account": True,
+                "cooperative_name": cooperative.name,
+                "cta_url": _absolute("/app"),
+                "cta_label": f"Open {cooperative.name}",
+            },
+        )
     return send_branded_email(
         to=user.email,
         subject=f"Welcome to {cooperative.name}",

@@ -1,9 +1,22 @@
 {% extends "emails/base.html" %}
 
-{% block preheader %}Your {{ brand_name }} account is ready — set your password to sign in.{% endblock %}
+{% block preheader %}{% if existing_account %}You're now a member of {{ cooperative_name }}.{% else %}Your {{ brand_name }} account is ready — set your password to sign in.{% endif %}{% endblock %}
 
 {% block content %}
   <p style="margin:0 0 14px;">Hello {{ full_name }},</p>
+{% if existing_account %}
+  <p style="margin:0 0 14px;">
+    <strong>{{ cooperative_name }}</strong> has accepted your request to join
+    {% if member_no %}— your member number is
+      <span style="font-family:'Courier New',monospace;color:#1b1a17;">{{ member_no }}</span>{% endif %}.
+  </p>
+
+  <p style="margin:0 0 14px;">
+    There's nothing new to set up. Sign in with the account you already have,
+    then tap the cooperative's name at the top of the app to switch to
+    {{ cooperative_name }}.
+  </p>
+{% else %}
 
   <p style="margin:0 0 14px;">
     An account has been created for you at <strong>{{ brand_name }}</strong>
@@ -21,6 +34,7 @@
     use “Forgot password” on the sign-in page to request a fresh one.
   </p>
 
+{% endif %}
   <p style="margin:18px 0 0;color:#6f6b62;font-size:13px;">
     Through your account you can see your contributions and savings, download
     statements, follow loan applications and vote in resolutions.
