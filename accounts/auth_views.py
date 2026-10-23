@@ -134,3 +134,56 @@ class PasswordResetConfirmView(APIView):
         except (TypeError, ValueError, OverflowError, UnicodeDecodeError):
             return None
         return User.objects.filter(pk=pk, is_active=True).first()
+
+
+class PasswordChangeSerializer(serializers.Serializer):
+    current_password = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(min_length=8, write_only=True)
+
+
+class PasswordChangeView(APIView):
+    """`POST /me/password/` — change your own password while signed in.
+
+    Asks for the current password even though the caller holds a token: a
+    phone left unlocked on a counter should not be enough to take the account
+    over.
+
+    The token is rotated and the new one returned. A user has one token,
+    shared by every device they are signed in on, so this signs the others
+    out — which is the point when a password is changed because someone else
+    knew it — while the device making the change carries straight on.
+    """
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_change"
+
+    def post(self, request):
+        serializer = PasswordChangeSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        user = request.user
+
+        if not user.check_password(data["current_password"]):
+            return Response(
+                {"current_password": ["Your current password is not correct."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            validate_password(data["new_password"], user)
+        except DjangoValidationError as exc:
+            return Response({"new_password": list(exc.messages)},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        user.set_password(data["new_password"])
+        user.save(update_fields=["password", "updated_at"])
+
+        from rest_framework.authtoken.models import Token
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
+
+        from audit.services import record_action
+        record_action(cooperative=None, actor=user,
+                      action="account.password_changed", entity=user)
+
+        return Response({"detail": "Your password has been changed.",
+                         "token": token.key})

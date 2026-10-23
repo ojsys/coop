@@ -95,6 +95,9 @@ REST_FRAMEWORK = {
     # unauthenticated and emails a third party, so it is abusable on two counts.
     'DEFAULT_THROTTLE_RATES': {
         'password_reset': '5/hour',
+        # Changing your own password needs the current one, so this caps how
+        # fast a stolen session can guess at it.
+        'password_change': '10/hour',
         # Public signup writes rows and sends mail on behalf of a stranger.
         'signup': '10/hour',
         # Login is the one endpoint that accepts guessed passwords. The scope

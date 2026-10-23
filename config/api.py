@@ -10,7 +10,8 @@ from accounts.member_views import (
     MemberSavingsProductViewSet, MemberWithdrawalViewSet,
 )
 from accounts.auth_views import (
-    LoginView, PasswordResetConfirmView, PasswordResetRequestView,
+    LoginView, PasswordChangeView, PasswordResetConfirmView,
+    PasswordResetRequestView,
 )
 from accounts.data_rights_views import (
     DeletionRequestViewSet, MyDataExportView, MyDeletionRequestView,
@@ -45,7 +46,8 @@ from platform_admin.public_views import InvoicePayView, InvoiceVerifyView
 from platform_admin.views import (
     DomainViewSet, IncidentViewSet, InvoiceViewSet, NotificationTemplateViewSet,
     OnboardingItemViewSet, PlanViewSet, PlatformTeamViewSet,
-    ProviderStatusViewSet, SubscriptionViewSet, SupportTicketViewSet,
+    PlatformUserViewSet, ProviderStatusViewSet, SubscriptionViewSet,
+    SupportTicketViewSet,
 )
 from core.public_views import (
     PublicBrandingView,
@@ -134,6 +136,8 @@ router.register("domains", DomainViewSet, basename="domain")
 router.register("provider-status", ProviderStatusViewSet,
                 basename="provider-status")
 router.register("platform-team", PlatformTeamViewSet, basename="platform-team")
+router.register("platform-users", PlatformUserViewSet,
+                basename="platform-user")
 router.register("support-tickets", SupportTicketViewSet,
                 basename="support-ticket")
 router.register("incidents", IncidentViewSet, basename="incident")
@@ -191,6 +195,7 @@ urlpatterns = [
     path("public/invoice/<str:pay_token>/", InvoicePayView.as_view(),
          name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
+    path("me/password/", PasswordChangeView.as_view(), name="me-password"),
     # A person's own data: a copy of all of it, and asking for deletion.
     path("me/data-export/", MyDataExportView.as_view(), name="me-data-export"),
     path("me/deletion-request/", MyDeletionRequestView.as_view(),

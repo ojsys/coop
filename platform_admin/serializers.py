@@ -277,3 +277,56 @@ class PlatformTeamMemberSerializer(serializers.ModelSerializer):
                 user.save(update_fields=["is_platform_admin", "is_staff"])
             validated_data["user"] = user
         return super().create(validated_data)
+
+
+class PlatformUserSerializer(serializers.ModelSerializer):
+    """A person's account as platform staff see it, for account recovery.
+
+    Only the identity fields are writable — name, email, phone. Everything
+    that confers access (platform admin, staff, active) stays read-only here;
+    those are granted deliberately elsewhere, not from a support screen.
+    """
+
+    memberships = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "full_name", "email", "phone", "is_active",
+                  "is_platform_admin", "is_superuser", "last_login",
+                  "created_at", "memberships"]
+        read_only_fields = ["is_active", "is_platform_admin", "is_superuser",
+                            "last_login", "created_at"]
+
+    def get_memberships(self, obj):
+        from accounts.models import Membership
+
+        # all_objects: platform staff are not bound to any one cooperative.
+        rows = (Membership.all_objects.filter(user=obj)
+                .select_related("cooperative", "role"))
+        return [{
+            "cooperative_id": m.cooperative_id,
+            "cooperative_name": m.cooperative.name,
+            "member_no": m.member_no,
+            "role": m.role.name if m.role_id else None,
+            "status": m.status,
+        } for m in rows]
+
+    def validate_full_name(self, value):
+        value = value.strip()
+        if not value:
+            raise serializers.ValidationError("A name is required.")
+        return value
+
+    def validate_email(self, value):
+        value = User.objects.normalize_email(value.strip()).lower()
+        clash = User.objects.filter(email__iexact=value)
+        if self.instance is not None:
+            clash = clash.exclude(pk=self.instance.pk)
+        if clash.exists():
+            raise serializers.ValidationError(
+                "Another account already uses this email address.")
+        return value
+
+
+class PlatformUserPasswordSerializer(serializers.Serializer):
+    password = serializers.CharField(min_length=8, write_only=True)

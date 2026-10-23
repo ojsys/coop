@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from django.db.models import Count
 from django.utils import timezone
-from rest_framework import permissions, viewsets
+from rest_framework import mixins, permissions, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
 from platform_admin.models import (
@@ -14,8 +15,9 @@ from platform_admin.models import (
 from platform_admin.serializers import (
     DomainSerializer, IncidentSerializer, InvoiceSerializer,
     NotificationTemplateSerializer, OnboardingItemSerializer, PlanSerializer,
-    PlatformTeamMemberSerializer, ProviderStatusSerializer,
-    SubscriptionSerializer, SupportTicketSerializer,
+    PlatformTeamMemberSerializer, PlatformUserPasswordSerializer,
+    PlatformUserSerializer, ProviderStatusSerializer, SubscriptionSerializer,
+    SupportTicketSerializer,
 )
 
 
@@ -207,3 +209,125 @@ class SupportTicketViewSet(PlatformViewSetBase):
         ticket.closed_at = None
         ticket.save(update_fields=["status", "closed_at", "updated_at"])
         return Response(self.get_serializer(ticket).data)
+
+
+class PlatformUserViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin,
+                          mixins.UpdateModelMixin, viewsets.GenericViewSet):
+    """Every account on the platform, for staff helping people who cannot help
+    themselves: a misspelt name, a wrong email, a forgotten password with no
+    access to the inbox the reset link goes to.
+
+    Each change is written to the audit log with the staff member who made it.
+    A password is never recorded — only that it was set, and by whom.
+    """
+
+    permission_classes = [IsPlatformAdmin]
+    serializer_class = PlatformUserSerializer
+    # Fields whose before/after go in the audit entry for an edit.
+    AUDITED_FIELDS = ("full_name", "email", "phone")
+
+    def get_queryset(self):
+        from django.contrib.auth import get_user_model
+        from django.db.models import Q
+
+        qs = get_user_model().objects.all()
+        q = (self.request.query_params.get("search") or "").strip()
+        if q:
+            qs = qs.filter(Q(full_name__icontains=q) | Q(email__icontains=q)
+                           | Q(phone__icontains=q)
+                           | Q(memberships__member_no__icontains=q)).distinct()
+        return qs.order_by("full_name", "id")
+
+    def _guard(self, user):
+        """Platform staff may not change a superuser's account unless they are
+        one: otherwise support access is a route to the keys of the platform."""
+        if user.is_superuser and not self.request.user.is_superuser:
+            raise PermissionDenied(
+                "Only a superuser can change a superuser's account.")
+
+    def perform_update(self, serializer):
+        from audit.services import record_action
+
+        user = serializer.instance
+        self._guard(user)
+        before = {f: getattr(user, f) for f in self.AUDITED_FIELDS}
+        user = serializer.save()
+        after = {f: getattr(user, f) for f in self.AUDITED_FIELDS}
+        changed = [f for f in self.AUDITED_FIELDS if before[f] != after[f]]
+        if changed:
+            record_action(
+                actor=self.request.user, action="platform.user_updated",
+                entity=user,
+                before={f: before[f] for f in changed},
+                after={f: after[f] for f in changed},
+            )
+
+    @action(detail=True, methods=["post"], url_path="set-password")
+    def set_password(self, request, pk=None):
+        """Set a new password for someone, and sign them out everywhere.
+
+        Staff then pass the password on to the person by a channel they trust;
+        it is not emailed, because the usual reason for being here is that the
+        person cannot get at their email.
+        """
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.authtoken.models import Token
+
+        from audit.services import record_action
+
+        user = self.get_object()
+        self._guard(user)
+        serializer = PlatformUserPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        password = serializer.validated_data["password"]
+        try:
+            validate_password(password, user)
+        except DjangoValidationError as exc:
+            return Response({"password": list(exc.messages)}, status=400)
+
+        user.set_password(password)
+        user.save(update_fields=["password", "updated_at"])
+        Token.objects.filter(user=user).delete()
+        record_action(actor=request.user,
+                      action="platform.user_password_set", entity=user)
+        return Response({"detail": f"Password set for {user.full_name}. "
+                                   "They have been signed out everywhere."})
+
+    @action(detail=True, methods=["post"], url_path="send-reset-link")
+    def send_reset_link(self, request, pk=None):
+        """Email the person the same reset link "Forgot password" sends."""
+        from audit.services import record_action
+        from communications.email import send_password_reset_email
+
+        user = self.get_object()
+        self._guard(user)
+        sent = send_password_reset_email(user)
+        record_action(actor=request.user,
+                      action="platform.user_reset_link_sent", entity=user,
+                      after={"email": user.email, "sent": bool(sent)})
+        if not sent:
+            return Response({"detail": "The reset email could not be sent."},
+                            status=502)
+        return Response({"detail": f"Reset link sent to {user.email}."})
+
+    @action(detail=False, methods=["get"])
+    def activity(self, request):
+        """The audit trail for account changes.
+
+        With ``?user=<id>``, everything recorded against that one account —
+        including the person's own password changes and resets. Without it,
+        every change platform staff have made to anyone's account.
+        """
+        from audit.models import AuditLog
+        from audit.serializers import AuditLogSerializer
+
+        qs = AuditLog.all_objects.select_related("actor")
+        user_id = request.query_params.get("user")
+        if user_id:
+            qs = qs.filter(entity_type="User", entity_id=str(user_id))
+        else:
+            qs = qs.filter(action__startswith="platform.user_")
+        page = self.paginate_queryset(qs)
+        return self.get_paginated_response(
+            AuditLogSerializer(page, many=True).data)
