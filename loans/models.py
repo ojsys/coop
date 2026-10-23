@@ -289,6 +289,11 @@ class LoanRepayment(TenantScopedModel, TimeStampedModel):
     # A member-reported bank-transfer note (e.g. sending bank, date, teller ref)
     # so an officer can match it against the society's account before confirming.
     note = models.CharField(max_length=255, blank=True)
+    # A bank transfer the member has *started* but not yet said they sent:
+    # they were shown the society's account and a reference, and have until
+    # this time to transfer. Cleared when they tap "I've sent it", which is
+    # what puts it in front of an officer. Null for everything else.
+    expires_at = models.DateTimeField(null=True, blank=True)
     journal = models.ForeignKey(
         "ledger.Journal", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="loan_repayments")

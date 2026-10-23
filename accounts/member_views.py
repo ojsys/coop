@@ -223,14 +223,63 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         from loans.services import LoanError, report_transfer
 
         loan = self.get_object()
+        started = self._started_transfer(loan, request.data.get("transfer"))
         try:
             repayment = report_transfer(
                 loan, amount=request.data.get("amount"),
                 reference=request.data.get("reference", ""),
-                note=request.data.get("note", ""))
+                note=request.data.get("note", ""), started=started)
         except LoanError as exc:
             raise ValidationError(str(exc))
         return Response(LoanRepaymentSerializer(repayment).data, status=201)
+
+    def _started_transfer(self, loan, transfer_id):
+        from loans.models import LoanRepayment
+        if not transfer_id:
+            return None
+        started = LoanRepayment.all_objects.filter(
+            loan=loan, pk=transfer_id).first()
+        if started is None:
+            raise ValidationError("That transfer was not found on this loan.")
+        return started
+
+    @action(detail=True, methods=["post"], url_path="start-transfer")
+    def start_transfer(self, request, pk=None):
+        """Pay by direct bank transfer, avoiding Paystack's fee: returns the
+        society's account, the amount, a reference for the narration and the
+        time the 30-minute window closes."""
+        from loans.serializers import LoanRepaymentSerializer
+        from loans.services import LoanError, start_transfer
+
+        loan = self.get_object()
+        try:
+            repayment = start_transfer(loan, amount=request.data.get("amount"))
+        except LoanError as exc:
+            raise ValidationError(str(exc))
+        coop = loan.cooperative
+        return Response({
+            **LoanRepaymentSerializer(repayment).data,
+            "bank": {
+                "bank_name": coop.bank_name,
+                "account_name": coop.bank_account_name or coop.name,
+                "account_no": coop.bank_account_no,
+            },
+        }, status=201)
+
+    @action(detail=True, methods=["post"], url_path="cancel-transfer")
+    def cancel_transfer(self, request, pk=None):
+        """Drop a started transfer the member has decided not to make."""
+        from loans.services import LoanError, cancel_transfer
+
+        loan = self.get_object()
+        started = self._started_transfer(loan, request.data.get("transfer"))
+        if started is None:
+            raise ValidationError("Say which transfer to cancel.")
+        try:
+            cancel_transfer(started)
+        except LoanError as exc:
+            raise ValidationError(str(exc))
+        return Response(status=204)
 
     @action(detail=True, methods=["post"], url_path="repay-verify")
     def repay_verify(self, request, pk=None):

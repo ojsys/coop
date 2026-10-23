@@ -33,8 +33,11 @@ class LoanProductSerializer(serializers.ModelSerializer):
 class LoanRepaymentSerializer(serializers.ModelSerializer):
     class Meta:
         model = LoanRepayment
+        # ``psp_reference`` is the member's own reference — for a bank
+        # transfer, the code they put in the narration. ``expires_at`` is set
+        # only on a transfer they started and have not yet said they sent.
         fields = ["id", "loan", "amount", "channel", "status", "note",
-                  "created_at"]
+                  "psp_reference", "expires_at", "created_at"]
 
 
 class RepaymentClaimSerializer(serializers.ModelSerializer):

@@ -8,6 +8,7 @@ Every member-visible transition also fires an in-app + email notification.
 from __future__ import annotations
 
 import calendar
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -1002,27 +1003,105 @@ def reverse_repayment(repayment, *, reason, actor=None):
     return repayment
 
 
+TRANSFER_WINDOW = timedelta(minutes=30)
+
+
+def _transfer_code(loan):
+    """A short reference the member types into their transfer's narration, so
+    an officer can match the credit on the society's statement to this loan.
+    No 0/O or 1/I: people read it off one screen and type it into another."""
+    import secrets
+
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return f"L{loan.id}-" + "".join(secrets.choice(alphabet) for _ in range(4))
+
+
+def unclaimed_transfers(qs):
+    """Bank transfers a member started but has not said they sent."""
+    from loans.models import LoanRepayment
+    return qs.filter(channel=LoanRepayment.Channel.TRANSFER,
+                     status=LoanRepayment.Status.PENDING,
+                     expires_at__isnull=False)
+
+
 @transaction.atomic
-def report_transfer(loan, *, amount, reference="", note=""):
+def start_transfer(loan, *, amount):
+    """Begin a repayment by direct bank transfer — no Paystack, so no fee.
+
+    Records a PENDING transfer with a reference and a 30-minute window, shown
+    to the member alongside the society's account. Officers are not told yet:
+    nothing has been sent. Starting again replaces any earlier unsent one on
+    the same loan, so a member who changes the amount does not leave a trail
+    of half-started transfers behind.
+    """
+    from loans.models import LoanRepayment
+
+    if not loan.cooperative.bank_account_no:
+        raise LoanError("Your society has not added a bank account for "
+                        "repayments yet. Pay with Paystack instead.")
+    amount = _validate_repayment(loan, amount)
+    unclaimed_transfers(LoanRepayment.all_objects.filter(loan=loan)).delete()
+    return LoanRepayment.all_objects.create(
+        cooperative=loan.cooperative, loan=loan, amount=amount,
+        channel=LoanRepayment.Channel.TRANSFER,
+        status=LoanRepayment.Status.PENDING,
+        psp_reference=_transfer_code(loan),
+        expires_at=timezone.now() + TRANSFER_WINDOW)
+
+
+@transaction.atomic
+def cancel_transfer(repayment):
+    """Drop a started transfer the member has not sent."""
+    from loans.models import LoanRepayment
+    if (repayment.channel != LoanRepayment.Channel.TRANSFER
+            or repayment.status != LoanRepayment.Status.PENDING
+            or repayment.expires_at is None):
+        raise LoanError("Only a transfer you have not sent can be cancelled.")
+    repayment.delete()
+
+
+@transaction.atomic
+def report_transfer(loan, *, amount=None, reference="", note="",
+                    started=None):
     """A member reports a direct bank transfer they've made ("I have paid").
 
     Records a PENDING repayment (channel=transfer) and notifies the society's
     officers to verify it against their account and confirm. Nothing posts to
-    the ledger until an officer confirms."""
+    the ledger until an officer confirms.
+
+    ``started`` is the transfer begun with ``start_transfer``: its amount and
+    reference are kept, and it is accepted even after the 30 minutes — the
+    window is guidance for the member, and money that arrived late still has
+    to be credited to them."""
     from loans.models import LoanRepayment
-    amount = _validate_repayment(loan, amount)
-    repayment = LoanRepayment.all_objects.create(
-        cooperative=loan.cooperative, loan=loan, amount=amount,
-        channel=LoanRepayment.Channel.TRANSFER,
-        status=LoanRepayment.Status.PENDING,
-        psp_reference=reference, note=note)
+    if started is not None:
+        if (started.loan_id != loan.id
+                or started.channel != LoanRepayment.Channel.TRANSFER
+                or started.status != LoanRepayment.Status.PENDING):
+            raise LoanError("That transfer is not waiting to be sent.")
+        if started.expires_at is None:
+            return started  # Already reported — a double tap.
+        started.expires_at = None
+        started.note = note or started.note
+        started.save(update_fields=["expires_at", "note", "updated_at"])
+        repayment, amount = started, started.amount
+    else:
+        amount = _validate_repayment(loan, amount)
+        repayment = LoanRepayment.all_objects.create(
+            cooperative=loan.cooperative, loan=loan, amount=amount,
+            channel=LoanRepayment.Channel.TRANSFER,
+            status=LoanRepayment.Status.PENDING,
+            psp_reference=reference, note=note)
     _notify_officers(
         loan.cooperative,
         title="Repayment reported — verify",
         body=(f"{loan.membership.user.full_name} ({loan.membership.member_no}) "
               f"reported a bank transfer of {_money(amount)} for their "
-              f"{loan.product.name}. Verify it against your account and confirm "
-              f"it in the console."))
+              f"{loan.product.name}"
+              + (f" with reference {repayment.psp_reference}"
+                 if repayment.psp_reference else "")
+              + ". Verify it against your account and confirm it in the "
+              "console."))
     return repayment
 
 

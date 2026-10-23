@@ -277,7 +277,11 @@ class LoanRepaymentViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         status = self.request.query_params.get("status")
         if status:
             qs = qs.filter(status=status)
-        return qs
+        # A transfer the member started but has not said they sent is not a
+        # claim yet — there is nothing for an officer to look for.
+        return qs.exclude(channel=LoanRepayment.Channel.TRANSFER,
+                          status=LoanRepayment.Status.PENDING,
+                          expires_at__isnull=False)
 
     @action(detail=True, methods=["post"])
     def confirm(self, request, pk=None):
