@@ -75,9 +75,13 @@ class Role(TenantScopedModel, TimeStampedModel):
     TREASURER = "treasurer"
     MEMBER = "member"
 
+    # Every exco runs the society from the console. The Chairperson was once
+    # read-only (approve and view, nothing more), which left the head of the
+    # society unable to admit a member or act on anything they could see.
     DEFAULT_ROLES = {
-        CHAIRPERSON: ("Chairperson", ["governance.approve", "governance.vote",
-                                      "reports.view"]),
+        CHAIRPERSON: ("Chairperson", ["governance.approve", "members.manage",
+                                      "governance.manage", "comms.broadcast",
+                                      "governance.vote", "reports.view"]),
         SECRETARY: ("Secretary", ["members.manage", "governance.manage",
                                    "comms.broadcast", "reports.view"]),
         TREASURER: ("Treasurer", ["ledger.post", "ledger.reconcile",
@@ -114,11 +118,11 @@ class Role(TenantScopedModel, TimeStampedModel):
     def is_officer(self) -> bool:
         """Holds an office — any permission beyond an ordinary member's.
 
-        Broader than ``is_privileged`` and deliberately so. A Chairperson holds
-        governance.approve and reports.view but none of PRIVILEGED_PERMISSIONS,
-        so they cannot post to the ledger or manage members — yet they sit on the
-        console to approve things and need to *see* what they are approving.
-        This is the line between "may look" and "may act".
+        Broader than ``is_privileged`` and deliberately so. A role holding
+        only, say, governance.approve and reports.view — none of
+        PRIVILEGED_PERMISSIONS — cannot post to the ledger or manage members,
+        yet sits on the console to approve things and needs to *see* what it is
+        approving. This is the line between "may look" and "may act".
 
         Defined by permissions rather than by slug, because a cooperative can add
         its own roles: a society that creates an "Auditor" role with

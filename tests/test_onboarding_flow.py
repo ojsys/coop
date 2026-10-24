@@ -199,8 +199,10 @@ def test_officers_are_told_as_well_as_the_contact_address(coop):
         "a privileged officer was not told their cooperative went live")
 
 
-def test_an_unprivileged_member_is_not_treated_as_an_officer(coop, member):
-    """Chairperson lacks every privileged permission, so it must not qualify.
+def test_an_unprivileged_member_is_not_treated_as_an_officer(
+        coop, member, observer_role):
+    """A read-only office lacks every privileged permission, so it must not
+    qualify.
 
     A role that reads as senior but carries none of ledger.post,
     ledger.reconcile, members.manage or governance.manage is exactly where
@@ -210,7 +212,7 @@ def test_an_unprivileged_member_is_not_treated_as_an_officer(coop, member):
 
     coop.contact_email = ""
     coop.save(update_fields=["contact_email"])
-    _officer(coop, "chair@example.com", slug="chairperson")
+    _officer(coop, "observer@example.com", slug=observer_role.slug)
 
     recipients = cooperative_notification_emails(coop)
     assert recipients == [], (

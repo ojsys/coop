@@ -5,8 +5,8 @@ Two defects are pinned here. First, a request could go entirely unseen: a
 cooperative with no privileged officer had nobody to notify, and nothing said
 so. The fix is the published contact address as a fallback — *not* widening the
 role check, because JoinRequestViewSet is gated by IsPrivilegedOfficer and a
-Chairperson mailed "review it in the console" would only find a permission
-wall. Second, the applicant was never acknowledged at all: they had a web page
+read-only officer mailed "review it in the console" would only find a
+permission wall. Second, the applicant was never acknowledged at all: they had a web page
 that vanished when the tab closed and no way to distinguish a submitted request
 from a lost one.
 
@@ -53,32 +53,43 @@ def _recipients():
 
 
 # ── The officers ────────────────────────────────────────────────────────────
-def test_a_chairperson_is_not_notified(coop,
-                                       django_capture_on_commit_callbacks):
-    """A Chairperson cannot act on a join request.
+def test_a_read_only_officer_is_not_notified(
+        coop, observer_role, django_capture_on_commit_callbacks):
+    """A read-only officer cannot act on a join request.
 
-    IsPrivilegedOfficer gates the viewset, and Chairperson holds only
+    IsPrivilegedOfficer gates the viewset, and this role holds only
     governance/reporting permissions — so mailing them "review it in the
     console" would send them to a permission wall. Notifying people who are
     powerless to respond trains them to ignore the mail.
     """
+    _holder(coop, observer_role.slug, "observer@imole.coop")
+    mail.outbox.clear()
+
+    with django_capture_on_commit_callbacks(execute=True):
+        _apply(coop)
+
+    assert "observer@imole.coop" not in _recipients()
+
+
+def test_a_chairperson_is_notified(coop, django_capture_on_commit_callbacks):
+    """Every exco can admit members, so every exco hears about a request."""
     _holder(coop, Role.CHAIRPERSON, "chair@imole.coop")
     mail.outbox.clear()
 
     with django_capture_on_commit_callbacks(execute=True):
         _apply(coop)
 
-    assert "chair@imole.coop" not in _recipients()
+    assert "chair@imole.coop" in _recipients()
 
 
-def test_a_chairperson_led_cooperative_still_reaches_somebody(
-        coop, django_capture_on_commit_callbacks):
+def test_a_cooperative_with_no_privileged_officer_still_reaches_somebody(
+        coop, observer_role, django_capture_on_commit_callbacks):
     """The case the narrow role check depends on being covered.
 
-    No privileged officer, only a Chairperson — so the published contact
+    No privileged officer, only a read-only one — so the published contact
     address is the single thing standing between a request and silence.
     """
-    _holder(coop, Role.CHAIRPERSON, "chair@imole.coop")
+    _holder(coop, observer_role.slug, "observer@imole.coop")
     coop.contact_email = "officers@imole.coop"
     coop.save(update_fields=["contact_email"])
     mail.outbox.clear()

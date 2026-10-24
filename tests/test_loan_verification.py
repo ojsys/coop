@@ -268,13 +268,14 @@ def test_a_chairperson_can_ask_too(coop, cash_loan):
     assert resp.json()["headline"] == "Paid in cash and recorded."
 
 
-def test_a_chairperson_cannot_trigger_a_recheck(coop, member, product):
+def test_a_read_only_officer_cannot_trigger_a_recheck(coop, member, product,
+                                                    observer_role):
     """It applies the answer, which can reverse a journal — that stays privileged."""
     loan = _transfer_loan(coop, member, product, Payout.Status.PENDING,
                           sent_at=timezone.now())
-    chair = _holder(coop, Role.CHAIRPERSON, "chair2@imole.coop")
+    observer = _holder(coop, observer_role.slug, "observer@imole.coop")
 
-    resp = _client(chair).post(
+    resp = _client(observer).post(
         f"/api/v1/loans/{loan.pk}/recheck-disbursement/", **_h(coop))
 
     assert resp.status_code == 403

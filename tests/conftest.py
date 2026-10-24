@@ -76,3 +76,18 @@ def make_member(coop):
             )
 
     return _make
+
+
+# The permissions a Chairperson held before every exco got full console
+# access: may look, may approve, may not act. No default role is read-only
+# any more, but a society can still create one (an Auditor, say), so the
+# tests of that tier use this.
+OBSERVER_PERMISSIONS = ["governance.approve", "governance.vote", "reports.view"]
+
+
+@pytest.fixture
+def observer_role(coop):
+    """A read-only office: an officer, but not privileged."""
+    return Role.all_objects.create(
+        cooperative=coop, slug="observer", name="Observer",
+        permissions=list(OBSERVER_PERMISSIONS))

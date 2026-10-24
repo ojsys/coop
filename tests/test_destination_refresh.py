@@ -253,13 +253,14 @@ def test_a_member_cannot_refresh_their_own_loans_destination(coop, member,
     assert loan.destination_bank_code == ""
 
 
-def test_a_chairperson_cannot_refresh_a_destination(coop, member, product):
+def test_a_read_only_officer_cannot_refresh_a_destination(
+        coop, member, product, observer_role):
     """Reads are open to office-holders; moving a payout target is not a read."""
     loan = _loan(coop, member, product, Loan.Status.APPROVED)
     _give_bank(member)
-    chair = _officer(coop, "chair@imole.coop", Role.CHAIRPERSON)
+    observer = _officer(coop, "observer@imole.coop", observer_role.slug)
 
-    resp = _client(chair).post(
+    resp = _client(observer).post(
         f"/api/v1/loans/{loan.id}/refresh-destination/", **_h(coop))
 
     assert resp.status_code == 403

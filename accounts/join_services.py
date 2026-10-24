@@ -42,8 +42,8 @@ def _unique_slug(name: str) -> str:
 # its published contact address plus every privileged officer.
 #
 # Privileged-only on purpose. JoinRequestViewSet is gated by IsPrivilegedOfficer,
-# so a Chairperson cannot view or decide a request; mailing them "review it in
-# the console" would send them to a permission wall. The contact address is what
+# so a read-only officer cannot view or decide a request; mailing them "review
+# it in the console" would send them to a permission wall. The contact address is what
 # stops a request going unseen when a cooperative has no privileged officer,
 # which was the actual hole — not the narrowness of the role check.
 
@@ -67,7 +67,7 @@ def check_officer_remains(membership, *, new_role=_UNSET, new_status=_UNSET):
     edits Membership.role directly and would otherwise walk straight past a
     serializer-only check.
     """
-    from accounts.models import Membership, Role
+    from accounts.models import Membership
 
     # A sentinel, not None: clearing the role outright is precisely the
     # destructive edit this guards, and None-means-unchanged would wave it
@@ -103,9 +103,9 @@ def check_officer_remains(membership, *, new_role=_UNSET, new_status=_UNSET):
 
     raise LastOfficerError(
         f"{membership.user.full_name} is the only officer of "
-        f"{membership.cooperative.name}. Give someone else a privileged role "
-        f"first — {Role.SECRETARY} or {Role.TREASURER} — or the cooperative "
-        f"would be left with nobody who can manage it."
+        f"{membership.cooperative.name}. Make someone else an exco first — "
+        f"Chairperson, Secretary or Treasurer — or the cooperative would be "
+        f"left with nobody who can manage it."
     )
 
 
@@ -187,9 +187,8 @@ def create_founding_admin(cooperative, *, full_name, email, phone=""):
     at all: nobody to email at go-live, nobody who could sign in, and nobody
     able to admit anyone else. This closes that.
 
-    "Admin" here means the **secretary** role — the only default role carrying
-    members.manage and governance.manage, which is what lets them admit others
-    and hand the role on. It is an ordinary membership, so it can be reassigned
+    "Admin" here means the **secretary** role, which carries members.manage
+    and governance.manage — what lets them admit others and hand roles on. It is an ordinary membership, so it can be reassigned
     or revoked by any officer later.
 
     No usable password is set: the welcome email invites them to choose one,

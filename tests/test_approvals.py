@@ -133,10 +133,11 @@ def test_exemption_ends_when_a_second_officer_is_added(coop, approved_loan):
     assert client.post(f"/api/v1/approvals/{aid}/approve/").status_code == 400
 
 
-def test_a_chairperson_counts_as_a_second_officer(coop, approved_loan):
+def test_a_read_only_officer_counts_as_a_second_officer(coop, approved_loan,
+                                                        observer_role):
     """Any office-holder can check — not only privileged roles."""
     secretary = _officer(coop, "solo@i.co")
-    _officer_as(coop, "chair@i.co", "chairperson")
+    _officer_as(coop, "observer@i.co", observer_role.slug)
     client = _client(secretary)
     aid = _submit(client, approved_loan)
 

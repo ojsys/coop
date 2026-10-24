@@ -59,8 +59,8 @@ def is_privileged_officer(user, request=None, *, requested_id=None) -> bool:
 def is_office_holder(user, request=None, *, requested_id=None) -> bool:
     """Whether ``user`` holds any office in the active cooperative.
 
-    Broader than :func:`is_privileged_officer`: a Chairperson qualifies here but
-    not there. Use it for reads that an office-holder legitimately needs and an
+    Broader than :func:`is_privileged_officer`: a read-only office (a role a
+    society creates with only reports.view, say) qualifies here but not there. Use it for reads that an office-holder legitimately needs and an
     ordinary member does not — a loan book carrying every member's bank details,
     for instance.
     """
@@ -90,8 +90,8 @@ class IsPrivilegedOfficerOrOfficeHolderReadOnly(permissions.BasePermission):
 
     The middle setting between the other two classes here, and the one that
     matches what SettingsPage states as the console's rule: "open to any
-    office-holder (a Chairperson sits on it for approvals), but writable only by
-    a privileged member".
+    office-holder (an Auditor sits on it to look), but writable only by a
+    privileged member".
 
     Use it where plain ``...OrReadOnly`` would be too wide — a queryset scoped to
     the cooperative rather than to the caller, carrying other members' personal
