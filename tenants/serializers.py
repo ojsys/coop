@@ -11,16 +11,24 @@ JOIN_CODE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 
 class CooperativeSerializer(serializers.ModelSerializer):
+    # The subscription's plan — what the society is billed on and what its
+    # member cap follows. ``tier`` is only a coarse size label.
+    plan_name = serializers.CharField(source="subscription.plan.name",
+                                      default=None, read_only=True)
+
     class Meta:
         model = Cooperative
         fields = ["id", "name", "slug", "registration_no", "coop_type",
                   "country", "state", "lga", "base_currency", "tier", "status",
-                  "brand_color", "logo", "favicon", "member_cap", "bank_name",
+                  "brand_color", "logo", "favicon", "member_cap", "plan_name",
+                  "bank_name",
                   "bank_account_name", "bank_account_no",
                   "contact_email", "contact_phone", "contact_address",
                   "statement_footer", "join_code", "join_link_enabled",
                   "created_at"]
-        read_only_fields = ["status"]
+        # The cap follows the plan (Subscription.sync_member_cap); it is shown,
+        # never set.
+        read_only_fields = ["status", "member_cap"]
 
 
 class CooperativeUpdateSerializer(serializers.ModelSerializer):
@@ -42,15 +50,16 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "registration_no", "coop_type", "country",
                   "state", "lga", "base_currency", "tier", "brand_color",
                   "logo",
-                  "favicon", "member_cap",
+                  "favicon",
                   "contact_email", "contact_phone", "contact_address",
                   "statement_footer", "join_code", "join_link_enabled"]
 
     _BRANDING = ("logo", "favicon", "brand_color")
     # Set by the platform, not the society: billing follows the plan's member
-    # band, and a size label or cap a society typed itself showed officers a
-    # plan and a limit that billing never used.
-    _PLATFORM_ONLY = ("tier", "member_cap")
+    # band, and a size label a society typed itself showed officers a plan
+    # billing never used. (The member cap is not writable by anyone: it
+    # follows the plan.)
+    _PLATFORM_ONLY = ("tier",)
 
     def validate_join_code(self, value):
         """The tail of the society's invite link: /join/<code>.

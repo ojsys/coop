@@ -188,13 +188,14 @@ class Subscription(TimeStampedModel):
     def sync_member_cap(self):
         """Keep the society's member cap at the top of its plan's band.
 
-        The cap is a legacy field the platform dashboard still shows; left to
-        itself it read 5,000 or more on a Starter society, contradicting the
-        plan. An open-ended band (Institutional) leaves it as it is.
+        Left to itself the cap read 5,000 or more on a Starter society,
+        contradicting the plan. An open-ended band (Institutional) sets it to
+        0, which every surface reads as "no limit" — leaving the old number in
+        place is how a stale cap survived a plan change.
         """
-        top = self.plan.max_members
+        top = self.plan.max_members or 0
         coop = self.cooperative
-        if top and coop.member_cap != top:
+        if coop.member_cap != top:
             coop.member_cap = top
             coop.save(update_fields=["member_cap", "updated_at"])
 

@@ -49,8 +49,9 @@ class CooperativeAdmin(admin.ModelAdmin):
     list_filter = ("status", "tier", "base_currency", "state")
     search_fields = ("name", "slug", "registration_no", "state", "lga")
     prepopulated_fields = {"slug": ("name",)}
-    readonly_fields = ("logo_preview", "favicon_preview", "created_at",
-                       "updated_at")
+    # member_cap follows the subscription's plan; shown, never edited.
+    readonly_fields = ("logo_preview", "favicon_preview", "member_cap",
+                       "created_at", "updated_at")
     date_hierarchy = "created_at"
     ordering = ("name",)
     actions = ("seed_chart_of_accounts",)

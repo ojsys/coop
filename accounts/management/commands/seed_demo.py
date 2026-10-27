@@ -135,7 +135,7 @@ class Command(BaseCommand):
         coop = provision_cooperative(
             name="Ìmọ̀lè Multipurpose CS", slug="imole",
             state="Lagos", coop_type="multipurpose",
-            tier=Cooperative.Tier.MEDIUM, member_cap=5000,
+            tier=Cooperative.Tier.MEDIUM,
         )
         # The demo walks through online payments, which wait on KYC.
         coop.verification.status = "verified"

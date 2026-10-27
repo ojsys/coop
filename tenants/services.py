@@ -11,8 +11,13 @@ def provision_cooperative(*, name: str, slug: str,
                           status: str = Cooperative.Status.ACTIVE,
                           **fields) -> Cooperative:
     """Create a cooperative and everything it needs to start operating:
-    a seeded chart of accounts, the canonical set of roles and an unverified
-    KYC record.
+    a seeded chart of accounts, the canonical set of roles, an unverified
+    KYC record and its free-trial subscription.
+
+    A new society has no members yet, so ``ensure_subscription`` puts it on the
+    entry plan (Starter). Done here, on every path, so no society is ever left
+    without a plan — an unbilled society had no member cap but the model's old
+    default to show.
 
     Every path creates it ACTIVE now — signup, platform provisioning, seeds.
     Unverified is the safe default: nothing here can open online payments; only
@@ -27,6 +32,8 @@ def provision_cooperative(*, name: str, slug: str,
     coop.seed_chart_of_accounts()
     Role.seed_defaults(coop)
     CooperativeVerification.objects.create(cooperative=coop)
+    from platform_admin.billing import ensure_subscription
+    ensure_subscription(coop)
     return coop
 
 

@@ -142,26 +142,25 @@ class CooperativeViewSet(mixins.ListModelMixin,
 
         user = self.request.user
         if user.is_platform_admin:
-            return Cooperative.objects.all()
+            return Cooperative.objects.select_related("subscription__plan")
         # A normal user only sees cooperatives they belong to. Use the
         # unscoped manager: this deliberately looks across tenants.
         coop_ids = (
             Membership.all_objects.filter(user=user)
             .values_list("cooperative_id", flat=True)
         )
-        return Cooperative.objects.filter(id__in=coop_ids)
+        return Cooperative.objects.filter(id__in=coop_ids).select_related(
+            "subscription__plan")
 
     def perform_create(self, serializer):
         # Live at once with its free trial, exactly like a self-serve signup.
         # The onboarding item is kept as the record of the hands-on help
         # (data migration, a parallel run) a society provisioned by the team
         # usually came for; it no longer decides when the society may operate.
-        from platform_admin.billing import ensure_subscription
         from platform_admin.services import start_onboarding
 
         data = serializer.validated_data
         coop = provision_cooperative(**data)
-        ensure_subscription(coop)
         start_onboarding(coop, owner=self.request.user)
         serializer.instance = coop
 

@@ -73,7 +73,11 @@ class Cooperative(TimeStampedModel):
         upload_to="coop_favicons/", null=True, blank=True,
         help_text="Square mark for the browser tab and the member PWA icon.",
     )
-    member_cap = models.PositiveIntegerField(default=5000)
+    # The top of the subscription plan's member band, kept in step by
+    # Subscription.sync_member_cap; 0 means no upper limit. Never typed in:
+    # a cap that disagreed with the plan (the old default was 5,000 whatever
+    # the society paid for) showed a limit billing never used.
+    member_cap = models.PositiveIntegerField(default=0, editable=False)
 
     # Public contact details — shown to members and printed on statements.
     # Distinct from any officer's personal details on their User record.

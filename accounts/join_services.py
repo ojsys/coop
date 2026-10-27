@@ -254,7 +254,6 @@ def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
     any password for a known address would let a stranger attach someone's
     account to a society of their choosing — or, worse, reset it.
     """
-    from platform_admin.billing import ensure_subscription
     from tenants.models import Cooperative
     from tenants.services import provision_cooperative
 
@@ -275,10 +274,6 @@ def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
         contact_email=applicant_email,
         contact_phone=applicant_phone,
     )
-    # Returns None when no plan matches, which must not refuse a signup: a
-    # missing price list is the platform's problem, not the society's.
-    ensure_subscription(cooperative)
-
     founder = create_founding_admin(
         cooperative, full_name=applicant_name, email=applicant_email,
         phone=applicant_phone, role_slug=Role.CHAIRPERSON, password=password)

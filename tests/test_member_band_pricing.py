@@ -21,6 +21,7 @@ from platform_admin.billing import (UnpricedSubscription, open_invoice,
                                     settle_invoice)
 from platform_admin.models import Plan, Subscription
 from platform_admin.services import subscription_mrr
+from tenants.models import Cooperative
 
 pytestmark = pytest.mark.django_db
 
@@ -232,12 +233,43 @@ def test_changing_plan_moves_the_cap(coop, price_list):
     assert coop.member_cap == 1000
 
 
-def test_an_open_ended_band_leaves_the_cap_alone(coop, price_list):
-    coop.member_cap = 8000
-    coop.save()
+def test_an_open_ended_band_means_no_cap(coop, price_list):
+    """0 is "no limit". Leaving the old number in place is how a stale cap —
+    5,000 from the model's former default — outlived the plan it came from."""
+    Cooperative.objects.filter(pk=coop.pk).update(member_cap=5000)
+    coop.refresh_from_db()
 
     _subscription(coop, price_list["Institutional"],
                   Subscription.Cycle.MONTHLY)
 
     coop.refresh_from_db()
-    assert coop.member_cap == 8000
+    assert coop.member_cap == 0
+
+
+def test_a_new_society_starts_on_starter_with_its_cap(price_list):
+    """Provisioning creates the trial itself, on the entry plan, so a society
+    never sits without a plan showing some other cap."""
+    from tenants.services import provision_cooperative
+
+    fresh = provision_cooperative(name="Fresh Co", slug="fresh-co")
+
+    assert fresh.subscription.plan.name == "Starter"
+    assert fresh.subscription.status == Subscription.Status.TRIAL
+    fresh.refresh_from_db()
+    assert fresh.member_cap == price_list["Starter"].max_members
+
+
+def test_the_cap_cannot_be_set_through_the_api(coop, price_list):
+    from rest_framework.test import APIClient
+
+    from accounts.models import User
+
+    admin = User.objects.create_user(email="ops@x.test", full_name="Ops",
+                                     password="x", is_platform_admin=True)
+    client = APIClient()
+    client.force_authenticate(admin)
+    client.patch(f"/api/v1/cooperatives/{coop.id}/", {"member_cap": 5000},
+                 format="json")
+
+    coop.refresh_from_db()
+    assert coop.member_cap != 5000
