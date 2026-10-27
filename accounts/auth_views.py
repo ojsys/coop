@@ -118,7 +118,14 @@ class PasswordResetConfirmView(APIView):
                             status=status.HTTP_400_BAD_REQUEST)
 
         user.set_password(data["password"])
-        user.save(update_fields=["password", "updated_at"])
+        # The link arrived in their inbox, so following it proves the address
+        # as surely as a verification link would.
+        fields = ["password", "updated_at"]
+        if user.email_verified_at is None:
+            from django.utils import timezone
+            user.email_verified_at = timezone.now()
+            fields.append("email_verified_at")
+        user.save(update_fields=fields)
 
         from audit.services import record_action
         record_action(cooperative=None, actor=user,
@@ -187,3 +194,47 @@ class PasswordChangeView(APIView):
 
         return Response({"detail": "Your password has been changed.",
                          "token": token.key})
+
+
+# ── Confirming an email address ─────────────────────────────────────────────
+class EmailVerifyView(APIView):
+    """`POST /auth/verify-email/` — follow the link sent to an address.
+
+    Public: the link is opened from an inbox, often on a phone where the person
+    is not signed in. The signed token is the whole authorisation.
+    """
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    def post(self, request):
+        from accounts.email_verification import mark_verified, user_for_token
+
+        user = user_for_token(str(request.data.get("token", "")))
+        if user is None:
+            return Response(
+                {"detail": "This confirmation link is invalid or has expired. "
+                           "Sign in and ask for a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        mark_verified(user)
+        return Response({"detail": "Thank you — your email is confirmed.",
+                         "email": user.email})
+
+
+class EmailVerifyResendView(APIView):
+    """`POST /me/verify-email/` — send the confirmation link again."""
+
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "password_reset"
+
+    def post(self, request):
+        from communications.email import send_email_verification
+
+        user = request.user
+        if user.email_verified_at is not None:
+            return Response({"detail": "Your email is already confirmed."})
+        send_email_verification(user)
+        return Response({"detail": f"We've sent a new link to {user.email}."})

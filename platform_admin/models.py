@@ -142,6 +142,10 @@ class Subscription(TimeStampedModel):
     # Until this date the society keeps every feature, whatever its plan — the
     # transition period when plan features first became enforced.
     features_grace_until = models.DateField(null=True, blank=True)
+    # The last "trial ends in N days" mark mailed (7, 3 or 1), so the daily
+    # cycle sends each reminder once — and still sends one it missed.
+    trial_reminded_days = models.PositiveSmallIntegerField(
+        null=True, blank=True, editable=False)
 
     class Meta:
         ordering = ["-created_at"]
@@ -904,12 +908,12 @@ class SiteContent(TimeStampedModel):
     cta_title = models.CharField(
         max_length=160, default="Ready to bring your cooperative on board?")
     cta_body = models.TextField(
-        default="Tell us about your cooperative and we will talk through what "
-                "needs migrating. Nothing is charged until you decide to go "
-                "ahead.",
+        default="Set your cooperative up in two minutes and use it free for "
+                "your first month. Want help moving your records across? "
+                "We'll do that with you.",
     )
     cta_button = models.CharField(max_length=40,
-                                  default="Apply as a cooperative")
+                                  default="Start your free trial")
     cta_image = models.ImageField(
         upload_to="site_content/", null=True, blank=True,
         help_text="Photograph behind the closing banner. A wide, fairly dark "

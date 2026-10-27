@@ -1,24 +1,28 @@
 """
-Signup: a society applying to the platform, and a person applying to a society.
+Signup: a society joining the platform, and a person applying to a society.
 
 Both flows start with a stranger, so the tests lean on the security-relevant
-properties: nothing is created ACTIVE without a human decision, and an officer
-of one society cannot see another's queue.
+properties: a self-serve society is live but unverified (the platform moves no
+money for it until KYC is approved), and an officer of one society cannot see
+another's queue.
 
 The two flows differ on accounts, deliberately:
 
 * **Asking to join** an existing society creates no account at all until an
   officer approves — an unapproved stranger must never hold credentials to
   somebody else's books.
-* **Applying with your own cooperative** does create one, because otherwise
-  the cooperative has no members, nobody to notify at go-live and nobody who
-  can sign in. It is still not a credential: the password is unusable and the
-  welcome email invites them to choose one.
+* **Signing up your own cooperative** creates one with the password chosen on
+  the form, so the founder is in the console at once. An address that already
+  has an account must give that account's password.
 """
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
+from django.conf import settings
 from django.core import mail
+from django.utils import timezone
 from django.core.cache import cache
 from rest_framework.test import APIClient
 
@@ -28,7 +32,7 @@ from accounts.join_services import (
 )
 from accounts.models import Membership, Role, User
 from core.context import use_tenant
-from platform_admin.models import OnboardingItem
+from platform_admin.models import OnboardingItem, Plan, Subscription
 from tenants.models import Cooperative
 
 pytestmark = pytest.mark.django_db
@@ -43,6 +47,12 @@ def _clear_throttle_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture
+def starter_plan():
+    return Plan.objects.create(name="Starter", tier=Plan.Tier.SMALL,
+                               price_monthly="10000")
 
 
 @pytest.fixture
@@ -66,67 +76,103 @@ def officer_client(coop, officer):
     return client
 
 
-# ── A society applying ──────────────────────────────────────────────────────
-def test_application_creates_a_prospective_society_in_the_pipeline():
-    resp = APIClient().post(APPLY_URL, {
+# ── A society signing up ────────────────────────────────────────────────────
+PASSWORD = "Harvest-Season-2026"
+
+
+def _signup(**overrides):
+    payload = {
         "society_name": "Aba Traders Multipurpose",
         "applicant_name": "Chidi Okafor",
         "applicant_email": "chidi@example.com",
-        "applicant_phone": "08030000000",
-        "state": "Abia", "lga": "Aba North",
-        "estimated_members": 320,
-    }, format="json")
+        "password": PASSWORD,
+        **overrides,
+    }
+    return APIClient().post(APPLY_URL, payload, format="json")
+
+
+def test_signup_creates_a_live_society_on_its_free_trial(starter_plan):
+    resp = _signup(applicant_phone="08030000000", state="Abia",
+                   lga="Aba North", estimated_members=320)
 
     assert resp.status_code == 201, resp.data
     society = Cooperative.objects.get(name="Aba Traders Multipurpose")
-    # Never ACTIVE from a public form — it goes live only at the end of
-    # onboarding, by a human.
-    assert society.status == Cooperative.Status.PROSPECTIVE
+    # Live at once: no pipeline stands between signing up and using it.
+    assert society.status == Cooperative.Status.ACTIVE
     assert society.contact_email == "chidi@example.com"
-    assert OnboardingItem.objects.filter(cooperative=society).exists()
+    assert not OnboardingItem.objects.filter(cooperative=society).exists()
+
+    sub = Subscription.objects.get(cooperative=society)
+    assert sub.status == Subscription.Status.TRIAL
+    assert sub.current_period_end == timezone.localdate() + timedelta(
+        days=settings.BILLING_TRIAL_DAYS), "the trial starts at signup"
 
 
-def test_applying_makes_the_applicant_the_first_officer():
-    """A cooperative with no members has nobody to email and nobody to sign in.
+def test_a_new_society_is_not_yet_verified():
+    """Live is not trusted: online payments wait for the KYC review."""
+    _signup()
+    society = Cooperative.objects.get(name="Aba Traders Multipurpose")
+    assert society.verification.status == "not_started"
 
-    Every cooperative created through this form used to be left in exactly
-    that state.
-    """
-    cache.clear()
-    APIClient().post(APPLY_URL, {
-        "society_name": "Founder Test Coop",
-        "applicant_name": "Chidi Okafor",
-        "applicant_email": "chidi@founder.test",
-    }, format="json")
 
-    society = Cooperative.objects.get(name="Founder Test Coop")
+def test_the_founder_is_chairperson_and_can_sign_in_at_once():
+    _signup()
+    society = Cooperative.objects.get(name="Aba Traders Multipurpose")
     membership = Membership.all_objects.get(cooperative=society)
 
-    assert membership.user.email == "chidi@founder.test"
+    assert membership.user.email == "chidi@example.com"
     assert membership.user.full_name == "Chidi Okafor"
     assert membership.status == Membership.Status.ACTIVE
-    assert membership.role.is_privileged, (
-        "the founder must be able to admit others and hand the role on")
+    assert membership.role.slug == Role.CHAIRPERSON
 
-
-def test_the_founder_gets_no_usable_password():
-    """Applying is not proof you control the inbox, so it mints no credential."""
-    cache.clear()
-    APIClient().post(APPLY_URL, {
-        "society_name": "No Password Coop", "applicant_name": "Ada",
-        "applicant_email": "ada@nopassword.test",
+    login = APIClient().post("/api/v1/auth/token/", {
+        "username": "chidi@example.com", "password": PASSWORD,
     }, format="json")
+    assert login.status_code == 200, login.data
+    assert "token" in login.data
 
-    user = User.objects.get(email="ada@nopassword.test")
-    assert not user.has_usable_password()
+
+def test_the_founders_email_starts_unconfirmed():
+    _signup()
+    user = User.objects.get(email="chidi@example.com")
+    assert user.email_verified_at is None
+
+
+def test_a_weak_password_is_refused():
+    resp = _signup(password="123")
+    assert resp.status_code == 400
+    assert "password" in resp.data
+    assert not Cooperative.objects.filter(
+        name="Aba Traders Multipurpose").exists()
+
+
+def test_signing_up_with_a_known_email_needs_that_accounts_password(coop):
+    """A public form must not let a stranger attach — or reset — an account."""
+    existing = User.objects.create_user(
+        email="ada@known.test", full_name="Ada", password="Original-Pass-99")
+
+    resp = _signup(applicant_email="ada@known.test", password="Something-Else-1")
+    assert resp.status_code == 400
+    assert not Cooperative.objects.filter(
+        name="Aba Traders Multipurpose").exists()
+    existing.refresh_from_db()
+    assert existing.check_password("Original-Pass-99"), "password untouched"
+
+
+def test_an_existing_account_can_found_a_second_society():
+    User.objects.create_user(
+        email="ada@known.test", full_name="Ada", password="Original-Pass-99")
+
+    resp = _signup(applicant_email="ada@known.test",
+                   password="Original-Pass-99")
+    assert resp.status_code == 201, resp.data
+    society = Cooperative.objects.get(name="Aba Traders Multipurpose")
+    assert Membership.all_objects.filter(
+        cooperative=society, user__email="ada@known.test").exists()
 
 
 def test_the_founder_gets_a_member_number():
-    cache.clear()
-    APIClient().post(APPLY_URL, {
-        "society_name": "Ìmọ̀lè Multipurpose Cooperative",
-        "applicant_name": "Bola", "applicant_email": "bola@number.test",
-    }, format="json")
+    _signup(society_name="Ìmọ̀lè Multipurpose Cooperative")
 
     society = Cooperative.objects.get(name="Ìmọ̀lè Multipurpose Cooperative")
     membership = Membership.all_objects.get(cooperative=society)
@@ -138,11 +184,7 @@ def test_creating_the_founding_admin_twice_is_harmless():
     """The backfill re-runs over cooperatives, so this must be idempotent."""
     from accounts.join_services import create_founding_admin
 
-    cache.clear()
-    APIClient().post(APPLY_URL, {
-        "society_name": "Idempotent Coop", "applicant_name": "Ngozi",
-        "applicant_email": "ngozi@idem.test",
-    }, format="json")
+    _signup(society_name="Idempotent Coop", applicant_email="ngozi@idem.test")
     society = Cooperative.objects.get(name="Idempotent Coop")
 
     original = Membership.all_objects.get(cooperative=society)
@@ -153,55 +195,42 @@ def test_creating_the_founding_admin_twice_is_harmless():
     assert Membership.all_objects.filter(cooperative=society).count() == 1
 
 
-def test_application_emails_both_the_applicant_and_the_platform(
+def test_signup_welcomes_the_founder_and_alerts_the_platform(
         django_capture_on_commit_callbacks):
     mail.outbox.clear()
     # Notifications are dispatched through transaction.on_commit, so a mail
-    # failure can never roll back an accepted application. That means the test
-    # has to let the commit hooks run — pytest's transaction never commits.
+    # failure can never roll back an accepted signup. That means the test has
+    # to let the commit hooks run — pytest's transaction never commits.
     with django_capture_on_commit_callbacks(execute=True):
-        APIClient().post(APPLY_URL, {
-            "society_name": "Ilorin Farmers", "applicant_name": "Bola A",
-            "applicant_email": "bola@example.com",
-        }, format="json")
+        _signup(society_name="Ilorin Farmers",
+                applicant_email="bola@example.com")
 
-    recipients = [to for m in mail.outbox for to in m.to]
-    assert "bola@example.com" in recipients, "the applicant gets an acknowledgement"
-
-    # Three, and it is worth naming them: the acknowledgement, the platform
-    # alert, and the welcome that carries the applicant's set-password link.
-    # The last one is what makes the cooperative reachable at all — without it
-    # nobody can ever sign in to it.
+    # Two: the founder's welcome and the platform alert. No set-password
+    # mail — the founder chose a password on the form.
     subjects = sorted(m.subject for m in mail.outbox)
-    assert len(mail.outbox) == 3, subjects
-    assert any("received" in s for s in subjects), "applicant acknowledgement"
-    assert any("New cooperative application" in s for s in subjects), \
-        "the platform team is alerted too"
-    assert any(s.startswith("Welcome to") for s in subjects), \
-        "the applicant is invited to set a password"
+    assert len(mail.outbox) == 2, subjects
+    assert any("New cooperative signup" in s for s in subjects)
 
-    welcome = next(m for m in mail.outbox if m.subject.startswith("Welcome to"))
-    assert "/reset-password?uid=" in welcome.body, \
-        "the welcome must carry a set-password link, never a password"
+    welcome = next(m for m in mail.outbox if "bola@example.com" in m.to)
+    assert "Ilorin Farmers is ready" in welcome.subject
+    assert "/verify-email?token=" in welcome.body, \
+        "the welcome carries the link that confirms the address"
 
 
 def test_two_societies_with_the_same_name_get_distinct_slugs():
-    payload = {"society_name": "Unity Cooperative", "applicant_name": "A",
-               "applicant_email": "a@example.com"}
-    APIClient().post(APPLY_URL, payload, format="json")
+    _signup(society_name="Unity Cooperative", applicant_email="a@example.com")
     cache.clear()
-    APIClient().post(APPLY_URL, {**payload, "applicant_email": "b@example.com"},
-                     format="json")
+    _signup(society_name="Unity Cooperative", applicant_email="b@example.com")
 
     slugs = list(Cooperative.objects.filter(name="Unity Cooperative")
                  .values_list("slug", flat=True))
     assert len(slugs) == 2 and len(set(slugs)) == 2, slugs
 
 
-def test_application_is_throttled():
-    payload = {"society_name": "Spam Co", "applicant_name": "S",
-               "applicant_email": "s@example.com"}
+def test_signup_is_throttled():
     client = APIClient()
+    payload = {"society_name": "Spam Co", "applicant_name": "S",
+               "applicant_email": "s@example.com", "password": PASSWORD}
     codes = [client.post(APPLY_URL, payload, format="json").status_code
              for _ in range(12)]
     assert 429 in codes
@@ -224,6 +253,13 @@ def test_society_search_hides_prospective_societies():
                                status=Cooperative.Status.PROSPECTIVE)
     resp = APIClient().get(SOCIETIES_URL, {"q": "Hidden"})
     assert resp.data == [], "a society that cannot admit members must not show"
+
+
+def test_society_search_hides_unverified_societies(unverified_coop):
+    """Until the platform knows who runs a society, a stranger searching by
+    name must not find it and take it for the real one."""
+    resp = APIClient().get(SOCIETIES_URL, {"q": "Fresh Start"})
+    assert resp.data == []
 
 
 # ── A person asking to join ─────────────────────────────────────────────────

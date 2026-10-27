@@ -498,6 +498,10 @@ def initiate_wallet_topup(cooperative, *, amount, email, actor=None,
     import secrets
     from decimal import Decimal, InvalidOperation
 
+    from tenants.verification import require_verified
+
+    require_verified(cooperative, "Funding the disbursement wallet is")
+
     from core.entitlements import (ELECTRONIC_PAYOUTS, has_feature,
                                    not_included_message)
     from payments.models import WalletTopUp
@@ -696,6 +700,11 @@ def ensure_subaccount(cooperative, *, actor=None,
     )
     if existing is not None:
         return existing, False
+
+    # Paystack settles to the subaccount's bank; it will not do that for a
+    # business it has not identified, and neither should the platform.
+    from tenants.verification import require_verified
+    require_verified(cooperative, "Connecting a settlement account is")
 
     missing = [
         label for label, value in (

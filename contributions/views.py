@@ -92,10 +92,14 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         with a reference the webhook will later confirm (posts to the ledger)."""
         import uuid
 
+        from tenants.verification import require_verified
+
         serializer = RecordContributionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
         cooperative = get_current_cooperative()
+        # Before anything is created, so a refusal leaves no pending row.
+        require_verified(cooperative)
 
         membership = Membership.objects.filter(pk=data["membership"]).first()
         ctype = ContributionType.objects.filter(

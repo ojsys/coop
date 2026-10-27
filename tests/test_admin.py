@@ -49,7 +49,7 @@ from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
                                    AppDownloadTally,
                                    SupportTicket)
 from savings.models import SavingsGoal, SavingsProduct, Withdrawal
-from tenants.models import BankDetailChange, Cooperative
+from tenants.models import BankDetailChange, Cooperative, CooperativeDocument
 
 # Apps whose models the admin is expected to cover.
 PROJECT_APPS = {
@@ -107,6 +107,10 @@ def dataset(coop, member, dues_type, member_funds):
         MemberDocument.objects.create(
             membership=member, doc_type=MemberDocument.DocType.ID,
             label="NIN slip", file="member_documents/nin.pdf",
+        )
+        CooperativeDocument.objects.create(
+            doc_type=CooperativeDocument.DocType.REGISTRATION_CERTIFICATE,
+            file="coop_documents/certificate.pdf",
         )
         ChannelPreference.objects.create(membership=member)
         announcement = Announcement.objects.create(

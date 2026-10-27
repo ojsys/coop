@@ -273,6 +273,93 @@ def send_welcome_email(membership) -> bool:
     )
 
 
+def _verify_email_link(user) -> str:
+    from accounts.email_verification import make_token
+
+    return _absolute(f"/verify-email?token={make_token(user)}")
+
+
+def send_email_verification(user) -> bool:
+    """Ask a person to confirm their address — the resend path."""
+    return send_branded_email(
+        to=user.email,
+        subject="Confirm your email address",
+        template="emails/verify_email.html",
+        context={"full_name": user.full_name,
+                 "cta_url": _verify_email_link(user),
+                 "cta_label": "Confirm my email"},
+    )
+
+
+def send_signup_welcome_email(membership) -> bool:
+    """Welcome the founder of a society that has just signed up.
+
+    It is live already, so this is not an announcement but a start: when the
+    trial ends, what to do first, and a link confirming their address — the
+    one thing submitting KYC waits for. An address already confirmed (they
+    hold an account elsewhere) gets the console link instead.
+    """
+    from core.entitlements import subscription_for
+
+    user = membership.user
+    cooperative = membership.cooperative
+    sub = subscription_for(cooperative)
+    verified = user.email_verified_at is not None
+    return send_branded_email(
+        to=user.email,
+        subject=f"{cooperative.name} is ready on CooperativeOS",
+        template="emails/signup_welcome.html",
+        context={
+            "full_name": user.full_name,
+            "coop_name": cooperative.name,
+            "trial_ends": (sub.current_period_end
+                           if sub and sub.status == sub.Status.TRIAL
+                           else None),
+            "needs_confirmation": not verified,
+            "cta_url": (_absolute("/console") if verified
+                        else _verify_email_link(user)),
+            "cta_label": ("Open your console" if verified
+                          else "Confirm my email"),
+        },
+    )
+
+
+def send_trial_ending_email(subscription, *, days_left: int) -> bool:
+    """Tell a society its free trial ends soon, and what happens then.
+
+    Mentions verification while it is outstanding: a society that reaches the
+    end of its trial without it has been keeping books but not taking money,
+    and that is the step most worth a nudge.
+    """
+    from tenants.verification import is_verified
+
+    cooperative = subscription.cooperative
+    recipients = cooperative_notification_emails(cooperative)
+    if not recipients:
+        return False
+    ends = subscription.current_period_end
+    when = "tomorrow" if days_left == 1 else f"in {days_left} days"
+    amount = subscription.cycle_amount
+    intro = (f"Your free trial of CooperativeOS ends {when}, on "
+             f"{ends.day} {ends:%B %Y}. After that we send an invoice for the "
+             f"{subscription.plan.name} plan")
+    intro += (f" ({subscription.plan.currency} {amount:,.2f} per "
+              f"{'year' if subscription.is_annual else 'month'})."
+              if amount is not None else ".")
+    if not is_verified(cooperative):
+        intro += (" You have not completed verification yet — until you do, "
+                  "members cannot pay online and loans cannot be paid out "
+                  "electronically.")
+    return send_alert_email(
+        to=recipients, cooperative=cooperative,
+        subject=f"{cooperative.name}: your free trial ends {when}",
+        heading=f"Your free trial ends {when}",
+        intro=intro,
+        cta_url=_absolute("/console"),
+        cta_label="Open the console",
+    )
+
+
 def send_subscription_invoice_email(invoice, *, is_reminder: bool = False,
                                     suspend_on=None) -> bool:
     """Send a cooperative its subscription invoice, or a reminder for it.

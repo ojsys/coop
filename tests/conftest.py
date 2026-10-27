@@ -10,18 +10,37 @@ from ledger.models import Account
 from tenants.services import provision_cooperative
 
 
+def verify(cooperative):
+    """Mark a society's KYC approved, as an established customer's would be.
+
+    A freshly provisioned society is unverified and the platform moves no money
+    for it; most tests exercise a society that is past that point.
+    """
+    cooperative.verification.status = "verified"
+    cooperative.verification.save(update_fields=["status", "updated_at"])
+    return cooperative
+
+
 @pytest.fixture
 def coop(db):
-    """A fully provisioned cooperative (chart of accounts + roles seeded)."""
-    return provision_cooperative(
+    """A fully provisioned, verified cooperative (chart of accounts + roles
+    seeded)."""
+    return verify(provision_cooperative(
         name="Ìmọ̀lè Multipurpose CS", slug="imole",
         state="Lagos", coop_type="multipurpose",
-    )
+    ))
+
+
+@pytest.fixture
+def unverified_coop(db):
+    """A society straight out of signup: live, its KYC not yet approved."""
+    return provision_cooperative(name="Fresh Start Cooperative", slug="fresh")
 
 
 @pytest.fixture
 def other_coop(db):
-    return provision_cooperative(name="Aba Traders Cooperative", slug="aba")
+    return verify(provision_cooperative(name="Aba Traders Cooperative",
+                                        slug="aba"))
 
 
 @pytest.fixture

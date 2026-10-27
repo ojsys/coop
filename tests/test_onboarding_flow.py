@@ -26,14 +26,17 @@ def api(admin):
     return c
 
 
-def test_provisioning_creates_prospective_tenant_and_onboarding_item(api):
+def test_provisioning_creates_a_live_tenant_and_onboarding_item(api):
     resp = api.post("/api/v1/cooperatives/", {
         "name": "Kano Millers Union", "slug": "kano-millers",
         "state": "Kano", "coop_type": "Multipurpose", "tier": "small",
     }, format="json")
     assert resp.status_code == 201, resp.content
     coop = Cooperative.objects.get(slug="kano-millers")
-    assert coop.status == Cooperative.Status.PROSPECTIVE
+    # Live at once, like a self-serve signup; the onboarding item records the
+    # hands-on help without gating the society on it.
+    assert coop.status == Cooperative.Status.ACTIVE
+    assert coop.verification.status == "not_started"
     item = OnboardingItem.objects.get(cooperative=coop)
     assert item.stage == OnboardingItem.Stage.DISCOVERY
 

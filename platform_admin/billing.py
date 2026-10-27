@@ -192,6 +192,35 @@ def _outstanding(cooperative=None):
     return qs
 
 
+TRIAL_REMINDER_DAYS = (7, 3, 1)
+
+
+def _trial_mark(days_left: int) -> int | None:
+    """The reminder a trial with ``days_left`` is due: the nearest mark at or
+    above it, so a day the cycle did not run is caught up the next day."""
+    marks = [m for m in TRIAL_REMINDER_DAYS if m >= days_left]
+    return min(marks) if marks else None
+
+
+def _trials_due_a_reminder(today: date, cooperative=None):
+    subs = Subscription.objects.filter(
+        status=Subscription.Status.TRIAL, current_period_end__gt=today,
+        current_period_end__lte=today + timedelta(
+            days=max(TRIAL_REMINDER_DAYS)),
+    ).select_related("cooperative", "plan")
+    if cooperative is not None:
+        subs = subs.filter(cooperative=cooperative)
+    for sub in subs:
+        days_left = (sub.current_period_end - today).days
+        mark = _trial_mark(days_left)
+        if mark is None:
+            continue
+        if sub.trial_reminded_days is not None \
+                and sub.trial_reminded_days <= mark:
+            continue
+        yield sub, days_left
+
+
 def run_billing_cycle(*, dry_run: bool = False, cooperative=None,
                       today: date | None = None) -> dict:
     """One pass of the whole cycle. Safe to run daily; safe to run twice.
@@ -200,12 +229,25 @@ def run_billing_cycle(*, dry_run: bool = False, cooperative=None,
     about, then acted on. Reminding before marking overdue would send the
     gentler wording on the day an account actually lapsed.
     """
-    from communications.email import send_subscription_invoice_email
+    from communications.email import (
+        send_subscription_invoice_email, send_trial_ending_email,
+    )
     from tenants.services import set_cooperative_status
 
     today = today or timezone.localdate()
-    report = {"issued": [], "reminded": [], "overdue": [], "suspended": [],
-              "unpriced": [], "dry_run": dry_run}
+    report = {"trial_reminded": [], "issued": [], "reminded": [],
+              "overdue": [], "suspended": [], "unpriced": [],
+              "dry_run": dry_run}
+
+    # 0. Trials about to end are told so, at a week, three days and a day out.
+    for sub, days_left in _trials_due_a_reminder(today, cooperative):
+        report["trial_reminded"].append(
+            f"{sub.cooperative.name} · {days_left}d")
+        if dry_run:
+            continue
+        if send_trial_ending_email(sub, days_left=days_left):
+            sub.trial_reminded_days = _trial_mark(days_left)
+            sub.save(update_fields=["trial_reminded_days", "updated_at"])
 
     # 1. Periods that have ended get an invoice — unless one is already open,
     #    which is what makes a second run in the same day harmless.

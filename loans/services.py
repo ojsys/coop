@@ -589,6 +589,11 @@ def disburse_loan_electronically(loan, *, actor=None):
 
     if loan.status != Loan.Status.APPROVED:
         raise LoanError("Only an approved loan can be disbursed.")
+    from tenants.verification import is_verified
+    if not is_verified(loan.cooperative):
+        raise LoanError(
+            "Electronic payouts open once your cooperative is verified. "
+            "Disburse it in cash or by bank transfer instead.")
     if not has_feature(loan.cooperative, ELECTRONIC_PAYOUTS):
         raise LoanError(
             not_included_message(loan.cooperative, ELECTRONIC_PAYOUTS)

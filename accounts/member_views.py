@@ -168,8 +168,10 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         from payments.providers import (PAYER_PAYMENT_UNAVAILABLE,
                                         PaymentInitError)
         from payments.services import initialize_loan_payment
+        from tenants.verification import require_verified
 
         loan = self.get_object()
+        require_verified(loan.cooperative)
         amount = request.data.get("amount")
         reference = request.data.get("psp_reference") or \
             f"LRPY-{uuid.uuid4().hex[:12]}"

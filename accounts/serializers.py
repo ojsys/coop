@@ -27,6 +27,9 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
     # What the society's plan includes, so each surface can offer only what
     # will work instead of letting an officer or member hit a refusal.
     plan = serializers.SerializerMethodField()
+    # The society's KYC status (tenants.verification), for the same reason:
+    # online payments wait on "verified".
+    cooperative_verification = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
@@ -35,7 +38,15 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
                   "cooperative_favicon", "cooperative_brand_color",
                   "member_no", "kind", "role_slug", "role_name",
                   "is_privileged", "is_officer", "status", "share_capital",
-                  "plan"]
+                  "plan", "cooperative_verification"]
+
+    def get_cooperative_verification(self, obj) -> str:
+        from tenants.models import CooperativeVerification
+
+        verification = CooperativeVerification.objects.filter(
+            cooperative=obj.cooperative).only("status").first()
+        return (verification.status if verification
+                else CooperativeVerification.Status.NOT_STARTED)
 
     def get_plan(self, obj) -> dict:
         """The society's subscription as the console shows it.
@@ -95,12 +106,17 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
 
 class UserSerializer(serializers.ModelSerializer):
     memberships = serializers.SerializerMethodField()
+    email_verified = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "full_name", "email", "phone", "national_id",
-                  "is_platform_admin", "two_factor_enabled", "memberships"]
+        fields = ["id", "full_name", "email", "email_verified", "phone",
+                  "national_id", "is_platform_admin", "two_factor_enabled",
+                  "memberships"]
         read_only_fields = ["is_platform_admin"]
+
+    def get_email_verified(self, obj) -> bool:
+        return obj.email_verified_at is not None
 
     def get_memberships(self, obj):
         # Unscoped: a user seeing their own memberships spans cooperatives and

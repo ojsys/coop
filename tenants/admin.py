@@ -17,7 +17,8 @@ from core.admin import (TenantScopedModelAdmin, TenantScopedTabularInline,
                         TwoFactorRequiredMixin)
 from payments.models import ProviderAccount
 from platform_admin.models import Domain, Subscription
-from tenants.models import BankDetailChange, Cooperative
+from tenants.models import (BankDetailChange, Cooperative, CooperativeDocument,
+                            CooperativeVerification)
 
 
 class SubscriptionInline(admin.StackedInline):
@@ -178,3 +179,22 @@ class BankDetailChangeAdmin(TwoFactorRequiredMixin, TenantScopedModelAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(CooperativeVerification)
+class CooperativeVerificationAdmin(admin.ModelAdmin):
+    """Read-mostly: decisions belong in the platform console, which audits and
+    notifies. Here for support to look a society up."""
+
+    list_display = ("cooperative", "status", "submitted_at", "reviewed_at",
+                    "reviewed_by")
+    list_filter = ("status",)
+    search_fields = ("cooperative__name",)
+    readonly_fields = ("cooperative", "status", "submitted_at", "submitted_by",
+                       "reviewed_at", "reviewed_by", "reviewer_note")
+
+
+@admin.register(CooperativeDocument)
+class CooperativeDocumentAdmin(TenantScopedModelAdmin):
+    list_display = ("cooperative", "doc_type", "label", "created_at")
+    list_filter = ("doc_type",)

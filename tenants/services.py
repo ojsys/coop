@@ -11,19 +11,22 @@ def provision_cooperative(*, name: str, slug: str,
                           status: str = Cooperative.Status.ACTIVE,
                           **fields) -> Cooperative:
     """Create a cooperative and everything it needs to start operating:
-    a seeded chart of accounts and the canonical set of roles.
+    a seeded chart of accounts, the canonical set of roles and an unverified
+    KYC record.
 
-    ``status`` defaults to ACTIVE (used by seeds/tests). The platform
-    provisioning flow passes PROSPECTIVE so the cooperative enters the
-    onboarding pipeline and only goes ACTIVE at go-live.
+    Every path creates it ACTIVE now — signup, platform provisioning, seeds.
+    Unverified is the safe default: nothing here can open online payments; only
+    a platform reviewer approving the society's KYC does that.
     """
     from accounts.models import Role
+    from tenants.models import CooperativeVerification
 
     coop = Cooperative.objects.create(
         name=name, slug=slug, status=status, **fields,
     )
     coop.seed_chart_of_accounts()
     Role.seed_defaults(coop)
+    CooperativeVerification.objects.create(cooperative=coop)
     return coop
 
 

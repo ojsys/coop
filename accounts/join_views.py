@@ -1,7 +1,7 @@
 """
 Signup endpoints.
 
-Four are public (a society applying, a person asking to join, and the society
+Four are public (a society signing up, a person asking to join, and the society
 search and invite-link lookup that make the second usable); one is for officers deciding those
 requests. The public ones create rows and send mail on behalf of a stranger, so
 they are throttled and validate carefully.
@@ -19,8 +19,8 @@ from rest_framework.views import APIView
 from accounts.join_models import JoinRequest
 from accounts.models import User
 from accounts.join_services import (
-    SignupError, apply_for_cooperative, approve_join_request,
-    reject_join_request, request_to_join,
+    SignupError, approve_join_request, reject_join_request, request_to_join,
+    sign_up_cooperative,
 )
 from core.permissions import IsPrivilegedOfficer
 from core.public_views import PublicView
@@ -28,11 +28,13 @@ from core.views import TenantScopedViewMixin
 from tenants.models import Cooperative
 
 
-# ── Public: a society applying to join the platform ─────────────────────────
-class CooperativeApplicationSerializer(serializers.Serializer):
+# ── Public: a society signing up to the platform ────────────────────────────
+class CooperativeSignupSerializer(serializers.Serializer):
     society_name = serializers.CharField(max_length=200)
     applicant_name = serializers.CharField(max_length=200)
     applicant_email = serializers.EmailField()
+    password = serializers.CharField(write_only=True, max_length=128,
+                                     trim_whitespace=False)
     applicant_phone = serializers.CharField(max_length=20, required=False,
                                             allow_blank=True, default="")
     country = serializers.CharField(max_length=2, required=False,
@@ -48,22 +50,49 @@ class CooperativeApplicationSerializer(serializers.Serializer):
     message = serializers.CharField(max_length=1000, required=False,
                                     allow_blank=True, default="")
 
+    def validate(self, attrs):
+        # Django's validators, so signup holds the same bar as a reset. Only
+        # for a new account: an existing one is checked against its own
+        # password instead, whatever rules were in force when it was chosen.
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoError
 
-class CooperativeApplicationView(PublicView):
-    """`POST /public/apply/` — a society asks to be onboarded."""
+        if not User.objects.filter(
+                email__iexact=attrs["applicant_email"]).exists():
+            candidate = User(email=attrs["applicant_email"],
+                             full_name=attrs["applicant_name"])
+            try:
+                validate_password(attrs["password"], candidate)
+            except DjangoError as exc:
+                raise serializers.ValidationError(
+                    {"password": list(exc.messages)}) from exc
+        return attrs
+
+
+class CooperativeSignupView(PublicView):
+    """`POST /public/apply/` — a society signs up and is live at once.
+
+    The path keeps its old name so clients built against it keep working. The
+    response carries no token: the client signs in through ``/auth/token/``
+    with the password it just chose, the one way into an account.
+    """
 
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "signup"
 
     def post(self, request):
-        serializer = CooperativeApplicationSerializer(data=request.data)
+        serializer = CooperativeSignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        cooperative = apply_for_cooperative(**serializer.validated_data)
+        try:
+            cooperative = sign_up_cooperative(**serializer.validated_data)
+        except SignupError as exc:
+            return Response({"detail": str(exc)},
+                            status=status.HTTP_400_BAD_REQUEST)
         return Response(
-            {"detail": "Thank you — we've received your application and will "
-                       "be in touch shortly.",
-             "society": cooperative.name},
+            {"detail": f"{cooperative.name} is ready.",
+             "society": cooperative.name,
+             "cooperative_id": cooperative.id},
             status=status.HTTP_201_CREATED,
         )
 
@@ -80,8 +109,10 @@ class PublicSocietySearchView(PublicView):
 
     Search-only, never a full listing: a member needs to find their own
     society, but the platform's customer list is not something to hand out in
-    bulk. Only ACTIVE societies appear — a prospective one cannot admit members
-    yet.
+    bulk. Only ACTIVE, *verified* societies appear: signup is self-serve, so
+    until the platform has checked who runs a society, a stranger searching by
+    name must not be able to find it and mistake it for the real one. Its own
+    invite link works from day one — that is how its officers bring members in.
     """
 
     MIN_QUERY = 2
@@ -94,7 +125,8 @@ class PublicSocietySearchView(PublicView):
 
         societies = (
             Cooperative.objects
-            .filter(status=Cooperative.Status.ACTIVE, name__icontains=query)
+            .filter(status=Cooperative.Status.ACTIVE, name__icontains=query,
+                    verification__status="verified")
             .order_by("name")[:self.LIMIT]
         )
         return Response(PublicSocietySerializer(societies, many=True).data)

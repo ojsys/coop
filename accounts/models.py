@@ -56,6 +56,11 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     is_platform_admin = models.BooleanField(default=False)
     # 2FA is required for finance/admin roles before handling live money.
     two_factor_enabled = models.BooleanField(default=False)
+    # Set when the person follows a link sent to this address. Signing up a
+    # cooperative does not wait for it — the console opens straight away — but
+    # submitting the society for verification does, so KYC is never filed in
+    # the name of an inbox nobody has shown they control.
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     objects = UserManager()
 

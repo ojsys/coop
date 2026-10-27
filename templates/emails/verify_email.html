@@ -1,0 +1,17 @@
+{% extends "emails/base.html" %}
+
+{% block preheader %}Confirm your email address to finish setting up.{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello {{ full_name }},</p>
+
+  <p style="margin:0 0 14px;">
+    Please confirm that this is your email address. The link works for seven
+    days.
+  </p>
+
+  <p style="margin:0;color:#6f6b62;font-size:13px;">
+    If you didn't ask for this, you can ignore it — nothing changes until the
+    link is used.
+  </p>
+{% endblock %}

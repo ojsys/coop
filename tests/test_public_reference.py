@@ -123,6 +123,7 @@ def test_application_records_the_country():
         "society_name": "Nairobi Teachers SACCO",
         "applicant_name": "Wanjiru M",
         "applicant_email": "wanjiru@example.com",
+        "password": "Harvest-Season-2026",
         "country": "KE", "state": "Nairobi", "lga": "Westlands",
         "coop_type": "SACCO (Savings & Credit)",
     }, format="json")
@@ -141,6 +142,7 @@ def test_application_without_a_country_is_still_accepted():
         "society_name": "Unstated Location Coop",
         "applicant_name": "A B",
         "applicant_email": "ab@example.com",
+        "password": "Harvest-Season-2026",
     }, format="json")
 
     assert resp.status_code == 201, resp.data

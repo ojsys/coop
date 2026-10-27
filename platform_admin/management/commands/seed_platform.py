@@ -31,7 +31,11 @@ def _get_or_provision(*, slug, name, **fields) -> Cooperative:
     existing = Cooperative.objects.filter(slug=slug).first()
     if existing:
         return existing
-    return provision_cooperative(name=name, slug=slug, **fields)
+    coop = provision_cooperative(name=name, slug=slug, **fields)
+    # Seeded live societies stand for ones already through KYC.
+    coop.verification.status = "verified"
+    coop.verification.save(update_fields=["status", "updated_at"])
+    return coop
 
 
 _GROWTH = ["electronic_payouts", "dividends", "savings_plans", "custom_branding"]
@@ -150,7 +154,8 @@ def seed_platform_data(stdout=None, style=None):
             ),
         )
 
-    # ── Onboarding pipeline (provision-first: real PROSPECTIVE tenants) ──────
+    # ── Assisted onboarding: live societies the team is helping migrate, with
+    #    their KYC still to come — what the verification queue starts from ──
     from platform_admin.services import start_onboarding
 
     onboarding_specs = [
@@ -165,8 +170,7 @@ def seed_platform_data(stdout=None, style=None):
         prospect = Cooperative.objects.filter(slug=slug).first()
         if prospect is None:
             prospect = provision_cooperative(
-                name=name, slug=slug, state=state, coop_type="Multipurpose",
-                status=Cooperative.Status.PROSPECTIVE)
+                name=name, slug=slug, state=state, coop_type="Multipurpose")
         item = start_onboarding(prospect)
         if item.stage != stage:
             item.stage = stage

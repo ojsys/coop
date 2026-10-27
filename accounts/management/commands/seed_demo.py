@@ -137,6 +137,9 @@ class Command(BaseCommand):
             state="Lagos", coop_type="multipurpose",
             tier=Cooperative.Tier.MEDIUM, member_cap=5000,
         )
+        # The demo walks through online payments, which wait on KYC.
+        coop.verification.status = "verified"
+        coop.verification.save(update_fields=["status", "updated_at"])
 
         with use_tenant(coop):
             from payments.models import ProviderAccount

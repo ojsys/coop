@@ -152,13 +152,16 @@ class CooperativeViewSet(mixins.ListModelMixin,
         return Cooperative.objects.filter(id__in=coop_ids)
 
     def perform_create(self, serializer):
-        # Platform provisioning starts a cooperative as PROSPECTIVE and drops it
-        # into the onboarding pipeline; it goes ACTIVE at go-live.
+        # Live at once with its free trial, exactly like a self-serve signup.
+        # The onboarding item is kept as the record of the hands-on help
+        # (data migration, a parallel run) a society provisioned by the team
+        # usually came for; it no longer decides when the society may operate.
+        from platform_admin.billing import ensure_subscription
         from platform_admin.services import start_onboarding
 
         data = serializer.validated_data
-        coop = provision_cooperative(
-            status=Cooperative.Status.PROSPECTIVE, **data)
+        coop = provision_cooperative(**data)
+        ensure_subscription(coop)
         start_onboarding(coop, owner=self.request.user)
         serializer.instance = coop
 

@@ -1,0 +1,49 @@
+{% extends "emails/base.html" %}
+
+{% comment %}
+Sent once, to the founder, the moment a cooperative signs up. The society is
+live already, so this sets out the first steps rather than announcing anything.
+The button confirms their address when it is not yet confirmed — submitting KYC
+waits on that — and otherwise opens the console.
+{% endcomment %}
+
+{% block preheader %}{{ coop_name }} is live{% if trial_ends %} — your free trial runs until {{ trial_ends|date:"j F Y" }}{% endif %}.{% endblock %}
+
+{% block content %}
+  <p style="margin:0 0 14px;">Hello {{ full_name }},</p>
+
+  <p style="margin:0 0 14px;">
+    <strong>{{ coop_name }}</strong> is set up and ready to use.
+    {% if trial_ends %}Your free trial runs until
+      <strong>{{ trial_ends|date:"j F Y" }}</strong> — nothing is charged
+      before then.{% endif %}
+  </p>
+
+  {% if needs_confirmation %}
+  <p style="margin:0 0 14px;">
+    First, please confirm this is your email address using the button below.
+  </p>
+  {% endif %}
+
+  <p style="margin:0 0 6px;font-weight:700;color:#1b1a17;">Getting started</p>
+  <ol style="margin:0 0 14px;padding-left:18px;">
+    <li style="margin-bottom:6px;">
+      Invite your Secretary and Treasurer, and share your invite link with
+      members.
+    </li>
+    <li style="margin-bottom:6px;">
+      Set up your contributions and dues, then add or import your members.
+    </li>
+    <li>
+      Verify your cooperative: each exco member uploads a means of ID, and you
+      upload the certificate of registration. Once we have checked them, online
+      payments, the disbursement wallet and electronic loan payouts open up.
+    </li>
+  </ol>
+
+  <p style="margin:18px 0 0;color:#6f6b62;font-size:13px;">
+    Money settles into your cooperative's own bank account — we record and
+    reconcile it, we never hold it. If anything looks wrong, reply to this email
+    and we will look at it with you.
+  </p>
+{% endblock %}

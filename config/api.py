@@ -10,15 +10,15 @@ from accounts.member_views import (
     MemberSavingsProductViewSet, MemberWithdrawalViewSet,
 )
 from accounts.auth_views import (
-    LoginView, PasswordChangeView, PasswordResetConfirmView,
-    PasswordResetRequestView,
+    EmailVerifyResendView, EmailVerifyView, LoginView, PasswordChangeView,
+    PasswordResetConfirmView, PasswordResetRequestView,
 )
 from accounts.data_rights_views import (
     DeletionRequestViewSet, MyDataExportView, MyDeletionRequestView,
     PublicDeletionConfirmView, PublicDeletionRequestView,
 )
 from accounts.join_views import (
-    CooperativeApplicationView, JoinLinkView, JoinRequestCreateView,
+    CooperativeSignupView, JoinLinkView, JoinRequestCreateView,
     JoinRequestViewSet, MyJoinRequestDetailView, MyJoinRequestsView,
     PublicSocietySearchView,
 )
@@ -64,11 +64,20 @@ from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
 from savings.views import (SavingsGoalViewSet, SavingsProductViewSet,
                           WithdrawalViewSet)
+from tenants.verification_views import (
+    CooperativeDocumentViewSet, PlatformVerificationViewSet,
+    VerificationViewSet,
+)
 from tenants.views import CooperativeViewSet, PlatformViewSet
 
 router = DefaultRouter()
 router.register("cooperatives", CooperativeViewSet, basename="cooperative")
 router.register("platform", PlatformViewSet, basename="platform")
+router.register("verification", VerificationViewSet, basename="verification")
+router.register("cooperative-documents", CooperativeDocumentViewSet,
+                basename="cooperative-document")
+router.register("platform-verifications", PlatformVerificationViewSet,
+                basename="platform-verification")
 router.register("members", MembershipViewSet, basename="member")
 router.register("member-documents", MemberDocumentViewSet,
                 basename="member-document")
@@ -146,6 +155,8 @@ router.register("notification-templates", NotificationTemplateViewSet,
 
 urlpatterns = [
     path("auth/token/", LoginView.as_view(), name="api-token"),
+    path("auth/verify-email/", EmailVerifyView.as_view(),
+         name="verify-email"),
     path("auth/password-reset/", PasswordResetRequestView.as_view(),
          name="password-reset"),
     path("auth/password-reset/confirm/", PasswordResetConfirmView.as_view(),
@@ -180,7 +191,7 @@ urlpatterns = [
     path("public/account-deletion/confirm/",
          PublicDeletionConfirmView.as_view(),
          name="public-account-deletion-confirm"),
-    path("public/apply/", CooperativeApplicationView.as_view(),
+    path("public/apply/", CooperativeSignupView.as_view(),
          name="public-apply"),
     path("public/join/", JoinRequestCreateView.as_view(),
          name="public-join"),
@@ -196,6 +207,8 @@ urlpatterns = [
          name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
     path("me/password/", PasswordChangeView.as_view(), name="me-password"),
+    path("me/verify-email/", EmailVerifyResendView.as_view(),
+         name="me-verify-email"),
     # A person's own data: a copy of all of it, and asking for deletion.
     path("me/data-export/", MyDataExportView.as_view(), name="me-data-export"),
     path("me/deletion-request/", MyDeletionRequestView.as_view(),

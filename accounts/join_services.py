@@ -1,10 +1,11 @@
 """
-Signing up: a society applying to join the platform, and a person applying to
-join a society.
+Signing up: a society joining the platform, and a person applying to join a
+society.
 
-Both are initiated by strangers, so both are written defensively — no account
-is created until a human approves, and neither flow reveals whether an address
-or a society already exists beyond what is already public.
+Both are initiated by strangers, so both are written defensively. A society
+goes live at once, but the platform moves no money for it until its KYC is
+approved (tenants.verification). A person asking to join an existing society
+gets no account until an officer approves them.
 """
 from __future__ import annotations
 
@@ -179,30 +180,37 @@ def _next_member_no(cooperative) -> str:
     return f"{prefix}-{n:04d}"
 
 
-def create_founding_admin(cooperative, *, full_name, email, phone=""):
+def create_founding_admin(cooperative, *, full_name, email, phone="",
+                          role_slug=Role.SECRETARY, password=None):
     """Give the person who brought a cooperative on board an account and make
-    them its first officer.
+    them one of its officers.
 
     Every cooperative created through the public form used to have no members
-    at all: nobody to email at go-live, nobody who could sign in, and nobody
-    able to admit anyone else. This closes that.
+    at all: nobody to email, nobody who could sign in, and nobody able to admit
+    anyone else. This closes that.
 
-    "Admin" here means the **secretary** role, which carries members.manage
-    and governance.manage — what lets them admit others and hand roles on. It is an ordinary membership, so it can be reassigned
-    or revoked by any officer later.
+    Self-serve signup makes the founder **Chairperson**, which carries every
+    permission, so one person can set the whole society up alone before the
+    rest of the exco is invited. The backfill for older cooperatives keeps the
+    Secretary it always gave. Either way it is an ordinary membership, so it
+    can be reassigned or revoked by any officer later.
 
-    No usable password is set: the welcome email invites them to choose one,
-    exactly as approve_join_request does. So applying creates no credential for
-    an address that has not proved it controls the inbox.
+    ``password`` is set only on an account this call creates — signup has
+    already checked it against an existing account, and nothing here may
+    overwrite a password somebody else chose. Passing one also means the
+    caller sends its own welcome. Without one, no usable password is set and
+    the welcome email invites them to choose one, exactly as
+    approve_join_request does.
 
     Idempotent — re-running for the same person returns their membership.
     """
     user = User.objects.filter(email__iexact=email).first()
     if user is None:
         user = User.objects.create_user(
-            email=email, full_name=full_name, phone=phone)
-        user.set_unusable_password()
-        user.save(update_fields=["password"])
+            email=email, full_name=full_name, phone=phone, password=password)
+        if password is None:
+            user.set_unusable_password()
+            user.save(update_fields=["password"])
 
     existing = Membership.all_objects.filter(
         cooperative=cooperative, user=user).first()
@@ -210,39 +218,56 @@ def create_founding_admin(cooperative, *, full_name, email, phone=""):
         return existing
 
     role = Role.all_objects.filter(
-        cooperative=cooperative, slug=Role.SECRETARY).first()
+        cooperative=cooperative, slug=role_slug).first()
     membership = Membership.all_objects.create(
         cooperative=cooperative, user=user, role=role,
         member_no=_next_member_no(cooperative),
         status=Membership.Status.ACTIVE, joined_at=timezone.localdate(),
     )
 
-    def _welcome():
-        from communications.email import send_welcome_email
-        send_welcome_email(membership)
+    if password is None:
+        def _welcome():
+            from communications.email import send_welcome_email
+            send_welcome_email(membership)
 
-    transaction.on_commit(_welcome)
+        transaction.on_commit(_welcome)
     return membership
 
 
-# ── A society applying to join the platform ─────────────────────────────────
+# ── A society signing up to the platform ────────────────────────────────────
 @transaction.atomic
-def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
-                          applicant_phone="", country="", state="", lga="",
-                          coop_type="", estimated_members=0, message=""):
-    """Register an application and put it into the onboarding pipeline.
+def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
+                        password, applicant_phone="", country="", state="",
+                        lga="", coop_type="", estimated_members=0,
+                        message=""):
+    """Create a cooperative that is live immediately, on its free trial.
 
-    The society is created PROSPECTIVE, not ACTIVE: it exists so the platform
-    team has something to work with, but it cannot be used until go-live moves
-    it to ACTIVE (see platform_admin.models.OnboardingItem.advance).
+    There is no approval step in front of the society any more: it is ACTIVE
+    from this call, its trial starts today, and the founder is signed straight
+    into the console. What a human still checks is *who runs it* — the KYC in
+    tenants.verification — and until that is approved the platform will not
+    move money for it. Bookkeeping needs no such trust; collecting money from
+    the public does.
+
+    If the address already has an account (an officer or member elsewhere),
+    the password must be that account's. Signup is a public form: accepting
+    any password for a known address would let a stranger attach someone's
+    account to a society of their choosing — or, worse, reset it.
     """
-    from platform_admin.services import start_onboarding
+    from platform_admin.billing import ensure_subscription
+    from tenants.models import Cooperative
     from tenants.services import provision_cooperative
+
+    existing = User.objects.filter(email__iexact=applicant_email).first()
+    if existing is not None and not existing.check_password(password):
+        raise SignupError(
+            "That email already has a CooperativeOS account. Use its password "
+            "— or reset it from the sign-in page — and try again.")
 
     cooperative = provision_cooperative(
         name=society_name,
         slug=_unique_slug(society_name),
-        status="prospective",
+        status=Cooperative.Status.ACTIVE,
         country=country,
         state=state,
         lga=lga,
@@ -250,40 +275,40 @@ def apply_for_cooperative(*, society_name, applicant_name, applicant_email,
         contact_email=applicant_email,
         contact_phone=applicant_phone,
     )
+    # Returns None when no plan matches, which must not refuse a signup: a
+    # missing price list is the platform's problem, not the society's.
+    ensure_subscription(cooperative)
 
-    # The applicant becomes the cooperative's first officer, so it is never
-    # left with nobody who can sign in or be notified.
-    create_founding_admin(cooperative, full_name=applicant_name,
-                          email=applicant_email, phone=applicant_phone)
+    founder = create_founding_admin(
+        cooperative, full_name=applicant_name, email=applicant_email,
+        phone=applicant_phone, role_slug=Role.CHAIRPERSON, password=password)
 
-    item = start_onboarding(cooperative)
-    note = (f"Applied via the website.\n"
-            f"Contact: {applicant_name} <{applicant_email}> {applicant_phone}\n"
-            f"Estimated members: {estimated_members or 'not stated'}")
-    if message:
-        note += f"\n\nThey said:\n{message}"
-    item.notes = f"{item.notes}\n\n{note}".strip() if item.notes else note
-    item.save(update_fields=["notes", "updated_at"])
+    from audit.services import record_action
+    record_action(cooperative=cooperative, actor=founder.user,
+                  action="cooperative.signup", entity=cooperative,
+                  after={"status": cooperative.status})
 
-    # Notifications must never roll back an accepted application.
-    transaction.on_commit(lambda: _notify_application(
-        cooperative=cooperative, applicant_name=applicant_name,
-        applicant_email=applicant_email, applicant_phone=applicant_phone,
-        estimated_members=estimated_members, message=message,
+    # Notifications must never roll back an accepted signup.
+    transaction.on_commit(lambda: _notify_signup(
+        membership=founder, estimated_members=estimated_members,
+        message=message,
     ))
     return cooperative
 
 
-def _notify_application(*, cooperative, applicant_name, applicant_email,
-                        applicant_phone, estimated_members, message):
+def _notify_signup(*, membership, estimated_members, message):
     from communications.email import (
-        send_alert_email, send_branded_email, platform_support_email,
+        platform_support_email, send_alert_email, send_signup_welcome_email,
     )
+
+    cooperative = membership.cooperative
+    user = membership.user
+    send_signup_welcome_email(membership)
 
     rows = [
         ("Cooperative", cooperative.name),
-        ("Contact", f"{applicant_name} <{applicant_email}>"),
-        ("Phone", applicant_phone or "—"),
+        ("Founder", f"{user.full_name} <{user.email}>"),
+        ("Phone", cooperative.contact_phone or "—"),
         ("Location", " · ".join(filter(None, (
             cooperative.lga, cooperative.state,
             country_name(cooperative.country)))) or "—"),
@@ -291,20 +316,12 @@ def _notify_application(*, cooperative, applicant_name, applicant_email,
     ]
     if message:
         rows.append(("Message", message))
-
-    send_branded_email(
-        to=applicant_email,
-        subject=f"We've received {cooperative.name}'s application",
-        template="emails/coop_application_received.html",
-        context={"full_name": applicant_name,
-                 "society_name": cooperative.name, "rows": rows},
-    )
     send_alert_email(
         to=platform_support_email(),
-        subject=f"New cooperative application: {cooperative.name}",
-        heading="A cooperative has applied to join",
-        intro="It has been created as PROSPECTIVE and added to the onboarding "
-              "pipeline at the Discovery stage.",
+        subject=f"New cooperative signup: {cooperative.name}",
+        heading="A cooperative has signed up",
+        intro="It is live on its free trial. Online payments stay closed "
+              "until its exco submits KYC and we verify it.",
         rows=rows,
     )
 

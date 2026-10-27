@@ -229,3 +229,83 @@ class BankDetailChange(TenantScopedModel, TimeStampedModel):
             self.bank_account_no, self.bank_account_name,
         ])) or "not set"
         return f"Collection account: {before} → {after}"
+
+
+class CooperativeVerification(TimeStampedModel):
+    """Whether the platform has checked who runs a cooperative (its KYC).
+
+    Kept apart from ``Cooperative.status`` on purpose. A society is live — it
+    can keep its books, admit members and run meetings — from the moment it
+    signs up. What waits for verification is everything that moves money
+    through the platform (see ``tenants.verification``), because that is what
+    an impostor society could abuse, and what Paystack will not settle without.
+
+    ``changes_requested`` returns the society to the checklist with the
+    reviewer's note; resubmitting puts it back in the queue.
+    """
+
+    class Status(models.TextChoices):
+        NOT_STARTED = "not_started", "Not started"
+        SUBMITTED = "submitted", "Awaiting review"
+        VERIFIED = "verified", "Verified"
+        CHANGES_REQUESTED = "changes_requested", "Changes requested"
+
+    cooperative = models.OneToOneField(
+        Cooperative, on_delete=models.CASCADE, related_name="verification",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices,
+                              default=Status.NOT_STARTED)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="+",
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="+",
+    )
+    # Shown to the officers when changes are requested, so "the certificate is
+    # cut off at the bottom" tells them exactly what to fix.
+    reviewer_note = models.CharField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.cooperative} — {self.get_status_display()}"
+
+    @property
+    def is_verified(self) -> bool:
+        return self.status == self.Status.VERIFIED
+
+
+class CooperativeDocument(TenantScopedModel, TimeStampedModel):
+    """A society's own KYC paper — its registration certificate, bye-laws.
+
+    The officers' personal documents are not here: they are ``MemberDocument``
+    rows on each officer's membership, the same place every member's KYC lives,
+    so an officer's ID is uploaded once and serves both purposes.
+    """
+
+    class DocType(models.TextChoices):
+        REGISTRATION_CERTIFICATE = ("registration_certificate",
+                                    "Certificate of registration")
+        BYE_LAWS = "bye_laws", "Bye-laws"
+        ELECTION_MINUTES = "election_minutes", "Minutes electing the exco"
+        OTHER = "other", "Other"
+
+    doc_type = models.CharField(max_length=30, choices=DocType.choices,
+                                default=DocType.OTHER)
+    label = models.CharField(max_length=120, blank=True)
+    file = models.FileField(upload_to="coop_documents/")
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="+",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return f"{self.get_doc_type_display()} — {self.cooperative}"
