@@ -41,6 +41,7 @@ from loans.models import Loan, LoanProduct, LoanRepayment, RepaymentInstalment
 from payments.models import (Bank, PaymentEvent, Payout, Provider,
                              ProviderAccount, WalletTopUp)
 from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
+                                   PlatformEmail, PlatformEmailRecipient,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
                                    ProviderCheck, ProviderStatus, SiteContent,
@@ -296,6 +297,13 @@ def dataset(coop, member, dues_type, member_funds):
         user=User.objects.create_user(email="lead@startupripple.co",
                                       full_name="Onboarding Lead"),
     )
+    platform_email = PlatformEmail.objects.create(
+        subject="New feature", body="Hello {{name}}.",
+        status=PlatformEmail.Status.SENT)
+    platform_email.cooperatives.set([coop])
+    PlatformEmailRecipient.objects.create(
+        email=platform_email, cooperative=coop, address="chair@imole.test",
+        status=PlatformEmailRecipient.Status.SENT)
 
     # Admin requests carry no tenant, so make the tests look like one.
     set_current_cooperative(None)

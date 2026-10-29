@@ -64,6 +64,7 @@ from core.reference_views import ReferenceView
 from reports.views import ReportsViewSet
 from savings.views import (SavingsGoalViewSet, SavingsProductViewSet,
                           WithdrawalViewSet)
+from platform_admin.mailing_views import PlatformEmailViewSet
 from tenants.verification_views import (
     CooperativeDocumentViewSet, PlatformVerificationViewSet,
     VerificationViewSet,
@@ -145,6 +146,8 @@ router.register("domains", DomainViewSet, basename="domain")
 router.register("provider-status", ProviderStatusViewSet,
                 basename="provider-status")
 router.register("platform-team", PlatformTeamViewSet, basename="platform-team")
+router.register("platform-emails", PlatformEmailViewSet,
+                basename="platform-email")
 router.register("platform-users", PlatformUserViewSet,
                 basename="platform-user")
 router.register("support-tickets", SupportTicketViewSet,

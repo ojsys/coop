@@ -1134,3 +1134,94 @@ class LegalDocument(TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.title} (/{self.slug})"
+
+
+# ── Platform email ──────────────────────────────────────────────────────────
+class PlatformEmail(TimeStampedModel):
+    """A message from the platform team to cooperatives' officers.
+
+    Composed as a draft, then sent once: sending fixes the recipient list as
+    :class:`PlatformEmailRecipient` rows, so what each person was sent — and
+    whether it went — stays answerable after officers change. See
+    ``platform_admin.mailing``.
+    """
+
+    class Audience(models.TextChoices):
+        ALL = "all", "Every live cooperative"
+        TRIAL = "trial", "Cooperatives on their free trial"
+        UNVERIFIED = "unverified", "Cooperatives not yet verified"
+        SELECTED = "selected", "Selected cooperatives"
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        SENDING = "sending", "Sending"
+        SENT = "sent", "Sent"
+
+    subject = models.CharField(max_length=200)
+    body = models.TextField(
+        help_text="Plain text. A blank line starts a paragraph; - a bullet; "
+                  "**bold**; [text](https://…) a link. {{name}} and "
+                  "{{cooperative}} are filled in for each recipient.")
+    audience = models.CharField(max_length=12, choices=Audience.choices,
+                                default=Audience.SELECTED)
+    cooperatives = models.ManyToManyField(
+        "tenants.Cooperative", blank=True, related_name="platform_emails",
+        help_text="For the selected audience: whose officers to write to.")
+    # Narrows a selected-cooperatives send to particular officers. Empty means
+    # every officer of those cooperatives.
+    only_users = models.ManyToManyField(
+        settings.AUTH_USER_MODEL, blank=True, related_name="+")
+    include_contact_email = models.BooleanField(
+        default=True,
+        help_text="Also write to each cooperative's published contact address.")
+    status = models.CharField(max_length=8, choices=Status.choices,
+                              default=Status.DRAFT)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="platform_emails_written")
+    sent_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="platform_emails_sent")
+    sent_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self) -> str:
+        return self.subject
+
+
+class PlatformEmailRecipient(TimeStampedModel):
+    """One address a :class:`PlatformEmail` went (or is going) to."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    email = models.ForeignKey(PlatformEmail, on_delete=models.CASCADE,
+                              related_name="recipients")
+    cooperative = models.ForeignKey(
+        "tenants.Cooperative", on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="+")
+    user = models.ForeignKey(settings.AUTH_USER_MODEL,
+                             on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name="+")
+    address = models.EmailField()
+    name = models.CharField(max_length=200, blank=True)
+    # What they are to the cooperative: "Chairperson", "Contact address".
+    capacity = models.CharField(max_length=120, blank=True)
+    status = models.CharField(max_length=8, choices=Status.choices,
+                              default=Status.PENDING)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["id"]
+        constraints = [
+            models.UniqueConstraint(fields=["email", "address"],
+                                    name="one_row_per_address_per_email"),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.address} · {self.email}"

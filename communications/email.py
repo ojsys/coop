@@ -76,11 +76,14 @@ def brand_context(cooperative=None) -> dict:
 
 
 def send_branded_email(*, to, subject, template, context=None,
-                       cooperative=None) -> bool:
+                       cooperative=None, connection=None) -> bool:
     """Render and send one message. Returns whether it was accepted.
 
     Never raises: a failed notification must not roll back the business action
     that triggered it (a recorded contribution, an approved loan).
+
+    ``connection`` lets a batch share one SMTP session instead of logging in
+    to the mail server once per message.
     """
     if not to:
         return False
@@ -107,6 +110,7 @@ def send_branded_email(*, to, subject, template, context=None,
         body=text,
         from_email=settings.DEFAULT_FROM_EMAIL,
         to=[to] if isinstance(to, str) else list(to),
+        connection=connection,
     )
     message.attach_alternative(html, "text/html")
 

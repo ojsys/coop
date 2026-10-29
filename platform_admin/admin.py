@@ -13,6 +13,7 @@ from django.db import models
 from django.utils.html import format_html
 
 from platform_admin.models import (AppDownloadTally, Domain, Incident,
+                                   PlatformEmail, PlatformEmailRecipient,
                                    Invoice, LegalDocument,
                                    NotificationTemplate, OnboardingItem, Plan,
                                    PlatformProfile, PlatformTeamMember,
@@ -577,3 +578,45 @@ class AppDownloadTallyAdmin(admin.ModelAdmin):
             f"previews are counted too.",
             messages.INFO)
         return super().changelist_view(request, extra_context)
+
+
+class PlatformEmailRecipientInline(admin.TabularInline):
+    model = PlatformEmailRecipient
+    extra = 0
+    can_delete = False
+    fields = ("address", "name", "capacity", "cooperative", "status",
+              "sent_at")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PlatformEmailRecipient)
+class PlatformEmailRecipientAdmin(admin.ModelAdmin):
+    list_display = ("address", "email", "cooperative", "status", "sent_at")
+    list_filter = ("status",)
+    search_fields = ("address", "email__subject")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PlatformEmail)
+class PlatformEmailAdmin(admin.ModelAdmin):
+    """Read-only record: messages are written and sent from the platform's
+    Email page, which keeps the per-recipient log honest."""
+
+    list_display = ("subject", "audience", "status", "sent_by", "sent_at")
+    list_filter = ("status", "audience")
+    search_fields = ("subject",)
+    inlines = [PlatformEmailRecipientInline]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

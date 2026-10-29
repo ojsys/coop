@@ -1,0 +1,14 @@
+{% extends "emails/base.html" %}
+
+{% comment %}
+A message from the platform team to a cooperative's officers, composed on the
+platform's Email page. ``body_html`` is rendered by platform_admin.mailing from
+the team's plain text and is already escaped.
+{% endcomment %}
+
+{% block preheader %}{{ subject }}{% endblock %}
+
+{% block content %}
+  {% if full_name %}<p style="margin:0 0 14px;">Hello {{ full_name }},</p>{% endif %}
+  {{ body_html }}
+{% endblock %}
