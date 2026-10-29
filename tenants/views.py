@@ -137,12 +137,18 @@ class CooperativeViewSet(mixins.ListModelMixin,
             "created": created,
         }, status=201 if created else 200)
 
+    # ?ordering= values the platform's Cooperatives page offers.
+    _ORDERINGS = {"name": ("name",), "-created_at": ("-created_at", "name")}
+
     def get_queryset(self):
         from accounts.models import Membership
 
         user = self.request.user
         if user.is_platform_admin:
-            return Cooperative.objects.select_related("subscription__plan")
+            qs = Cooperative.objects.select_related("subscription__plan")
+            if self.action == "list":
+                qs = self._search_and_order(qs)
+            return qs
         # A normal user only sees cooperatives they belong to. Use the
         # unscoped manager: this deliberately looks across tenants.
         coop_ids = (
@@ -151,6 +157,20 @@ class CooperativeViewSet(mixins.ListModelMixin,
         )
         return Cooperative.objects.filter(id__in=coop_ids).select_related(
             "subscription__plan")
+
+    def _search_and_order(self, qs):
+        """``?search=`` over name, state, registration number and slug, and
+        ``?ordering=name|-created_at`` (newest first shows new signups)."""
+        from django.db.models import Q
+
+        params = self.request.query_params
+        term = (params.get("search") or "").strip()
+        if term:
+            qs = qs.filter(Q(name__icontains=term) | Q(state__icontains=term)
+                           | Q(registration_no__icontains=term)
+                           | Q(slug__icontains=term))
+        ordering = self._ORDERINGS.get(params.get("ordering", ""))
+        return qs.order_by(*ordering) if ordering else qs
 
     def perform_create(self, serializer):
         # Live at once with its free trial, exactly like a self-serve signup.

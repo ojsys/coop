@@ -121,3 +121,35 @@ def test_trials_and_past_due_are_not_counted_as_revenue(coop, other_coop):
     assert breakdown["trial"]["count"] == 1
     assert breakdown["past_due"]["count"] == 1
     assert breakdown["past_due"]["value"] == Decimal("10000")
+
+
+# ── The Cooperatives list: search, newest first, pages ──────────────────────
+def test_the_cooperatives_list_searches_orders_and_pages(db):
+    from datetime import timedelta
+
+    from django.utils import timezone
+    from rest_framework.test import APIClient
+
+    from accounts.models import User
+    from tenants.models import Cooperative
+    from tenants.services import provision_cooperative
+
+    admin = User.objects.create_user(email="ops@list.test", full_name="Ops",
+                                     password="x", is_platform_admin=True)
+    now = timezone.now()
+    for i in range(30):
+        coop = provision_cooperative(name=f"Society {i:02d}", slug=f"soc-{i}")
+        Cooperative.objects.filter(pk=coop.pk).update(
+            created_at=now - timedelta(days=30 - i))
+    client = APIClient()
+    client.force_authenticate(admin)
+
+    page = client.get("/api/v1/cooperatives/",
+                      {"ordering": "-created_at", "page_size": 25}).data
+    assert page["count"] == 30
+    assert len(page["results"]) == 25
+    assert page["results"][0]["name"] == "Society 29", "newest first"
+    assert "created_at" in page["results"][0]
+
+    found = client.get("/api/v1/cooperatives/", {"search": "society 07"}).data
+    assert [c["name"] for c in found["results"]] == ["Society 07"]
