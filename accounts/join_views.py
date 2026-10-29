@@ -110,13 +110,10 @@ class PublicSocietySearchView(PublicView):
 
     Search-only, never a full listing: a member needs to find their own
     society, but the platform's customer list is not something to hand out in
-    bulk. Only ACTIVE societies the platform vouches for appear — verified,
-    or listed by the platform team (``publicly_listed``: the societies it
-    already knew before signup went self-serve, and those it provisions).
-    Signup is self-serve, so until someone has checked who runs a society, a
-    stranger searching by name must not be able to find it and mistake it for
-    the real one. Its own invite link works from day one — that is how its
-    officers bring members in.
+    bulk. Every ACTIVE society appears, from the day it signs up, unless the
+    platform has unlisted it (``publicly_listed``). KYC is not a condition:
+    it gates money movement only, and a request to join still needs an
+    officer of the society to approve it.
     """
 
     MIN_QUERY = 2
@@ -138,9 +135,7 @@ class PublicSocietySearchView(PublicView):
 
         findable = (
             Cooperative.objects
-            .filter(Q(verification__status="verified")
-                    | Q(publicly_listed=True),
-                    status=Cooperative.Status.ACTIVE)
+            .filter(status=Cooperative.Status.ACTIVE, publicly_listed=True)
             .order_by("name")
         )
         # The phrase first, then every society sharing a distinctive word of

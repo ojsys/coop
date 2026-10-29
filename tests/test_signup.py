@@ -255,11 +255,19 @@ def test_society_search_hides_prospective_societies():
     assert resp.data == [], "a society that cannot admit members must not show"
 
 
-def test_society_search_hides_unverified_societies(unverified_coop):
-    """Until the platform knows who runs a society, a stranger searching by
-    name must not find it and take it for the real one."""
+def test_society_search_finds_a_society_before_its_kyc(unverified_coop):
+    """KYC gates money movement only. Hiding unverified societies left every
+    society that signed up after the free trial launched unfindable by its own
+    members (seen in production)."""
     resp = APIClient().get(SOCIETIES_URL, {"q": "Fresh Start"})
-    assert resp.data == []
+    assert [s["id"] for s in resp.data] == [unverified_coop.id]
+
+
+def test_society_search_hides_a_society_the_platform_unlisted(coop):
+    Cooperative.objects.filter(pk=coop.pk).update(publicly_listed=False)
+
+    resp = APIClient().get(SOCIETIES_URL, {"q": coop.name[:4]})
+    assert coop.id not in [s["id"] for s in resp.data]
 
 
 def test_society_search_finds_a_society_by_a_word_of_what_people_call_it(
@@ -299,48 +307,23 @@ def test_society_search_does_not_list_every_cooperative_on_a_generic_word(
     assert resp.data == []
 
 
-def test_a_society_the_platform_lists_is_found_before_kyc(unverified_coop):
-    """The societies from before self-serve signup went live with KYC not
-    started; their members still have to be able to find them to join."""
-    unverified_coop.publicly_listed = True
-    unverified_coop.save()
-
-    resp = APIClient().get(SOCIETIES_URL, {"q": "Fresh Start"})
-    assert [s["id"] for s in resp.data] == [unverified_coop.id]
-
-
-def test_a_self_serve_signup_starts_unlisted(starter_plan):
+def test_a_self_serve_signup_is_findable_at_once(starter_plan):
     assert _signup(society_name="Lookalike Thrift").status_code == 201
 
-    coop = Cooperative.objects.get(name="Lookalike Thrift")
-    assert coop.publicly_listed is False
-    assert APIClient().get(SOCIETIES_URL, {"q": "Lookalike"}).data == []
-
-
-def test_a_society_the_team_provisions_is_listed(db):
-    admin = User.objects.create_user(email="ops@x.test", full_name="Ops",
-                                     password="x", is_platform_admin=True)
-    client = APIClient()
-    client.force_authenticate(admin)
-
-    resp = client.post("/api/v1/cooperatives/",
-                       {"name": "Team Made Coop", "slug": "team-made"},
-                       format="json")
-
-    assert resp.status_code == 201, resp.data
-    assert Cooperative.objects.get(slug="team-made").publicly_listed is True
+    found = APIClient().get(SOCIETIES_URL, {"q": "Lookalike"}).data
+    assert [s["name"] for s in found] == ["Lookalike Thrift"]
 
 
 def test_only_the_platform_can_change_the_listing(coop):
-    """Listing is what keeps a look-alike out of strangers' searches, so a
-    society's own officers cannot switch it on for themselves."""
+    """Unlisting is how a look-alike is taken out of strangers' searches, so
+    a society's own officers cannot switch it back on for themselves."""
     from tenants.serializers import CooperativeUpdateSerializer
 
     class _Req:
         user = User(is_platform_admin=False)
 
     serializer = CooperativeUpdateSerializer(
-        coop, data={"publicly_listed": True}, partial=True,
+        coop, data={"publicly_listed": False}, partial=True,
         context={"request": _Req()})
     assert serializer.is_valid(), serializer.errors
     assert "publicly_listed" not in serializer.validated_data
@@ -365,6 +348,22 @@ def test_the_migration_lists_existing_societies_but_not_self_serve_ones(
     unverified_coop.refresh_from_db()
     assert coop.publicly_listed is True
     assert unverified_coop.publicly_listed is False
+
+
+def test_the_second_migration_lists_the_self_serve_societies_too(
+        unverified_coop):
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    Cooperative.objects.update(publicly_listed=False)
+
+    importlib.import_module(
+        "tenants.migrations.0013_list_every_society").forwards(
+            django_apps, None)
+
+    unverified_coop.refresh_from_db()
+    assert unverified_coop.publicly_listed is True
 
 
 # ── A person asking to join ─────────────────────────────────────────────────

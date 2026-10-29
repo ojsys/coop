@@ -60,8 +60,8 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
     # band, and a size label a society typed itself showed officers a plan
     # billing never used. (The member cap is not writable by anyone: it
     # follows the plan.)
-    # Search listing is the platform's call for the same reason KYC is: it is
-    # what stops a look-alike society being found by strangers.
+    # Unlisting is the platform's call: it is how a look-alike society is taken
+    # out of strangers' searches.
     _PLATFORM_ONLY = ("tier", "publicly_listed")
 
     def validate_join_code(self, value):
