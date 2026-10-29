@@ -262,6 +262,43 @@ def test_society_search_hides_unverified_societies(unverified_coop):
     assert resp.data == []
 
 
+def test_society_search_finds_a_society_by_a_word_of_what_people_call_it(
+        coop):
+    """Seen in production: "Digital Adashe" found nothing, because the
+    society is registered as "Adashe"."""
+    Cooperative.objects.filter(pk=coop.pk).update(name="Adashe")
+
+    resp = APIClient().get(SOCIETIES_URL, {"q": "Digital Adashe"})
+
+    assert [s["id"] for s in resp.data] == [coop.id]
+
+
+def test_society_search_shows_every_society_sharing_a_name(coop, other_coop):
+    """Two societies both called something "Adashe": the member sees both,
+    the exact phrase match first, and picks theirs by LGA and state."""
+    Cooperative.objects.filter(pk=coop.pk).update(name="Digital Adashe")
+    Cooperative.objects.filter(pk=other_coop.pk).update(
+        name="Adashe Women Thrift")
+
+    exact = APIClient().get(SOCIETIES_URL, {"q": "Digital Adashe"}).data
+    word = APIClient().get(SOCIETIES_URL, {"q": "adashe"}).data
+
+    assert [s["id"] for s in exact] == [coop.id, other_coop.id]
+    assert {s["id"] for s in word} == {coop.id, other_coop.id}
+
+
+def test_society_search_does_not_list_every_cooperative_on_a_generic_word(
+        coop):
+    """The word fallback skips words almost every name carries, or the search
+    would hand out the platform's customer list."""
+    Cooperative.objects.filter(pk=coop.pk).update(
+        name="Plateau Farmers Cooperative Society")
+
+    resp = APIClient().get(SOCIETIES_URL, {"q": "Digital Cooperative Society"})
+
+    assert resp.data == []
+
+
 def test_a_society_the_platform_lists_is_found_before_kyc(unverified_coop):
     """The societies from before self-serve signup went live with KYC not
     started; their members still have to be able to find them to join."""

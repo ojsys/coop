@@ -120,20 +120,43 @@ class PublicSocietySearchView(PublicView):
     """
 
     MIN_QUERY = 2
+    MIN_WORD = 3
     LIMIT = 20
+    # Words nearly every society's name carries. Matching on them alone would
+    # turn "Digital Cooperative" into a listing of every cooperative.
+    GENERIC_WORDS = frozenset({
+        "the", "and", "of", "for", "cooperative", "co-operative", "coop",
+        "co-op", "society", "societies", "multipurpose", "multi-purpose",
+        "limited", "ltd", "union", "association", "thrift", "credit",
+        "savings", "mcs", "mpcs", "cs", "ctcs",
+    })
 
     def get(self, request):
         query = (request.query_params.get("q") or "").strip()
         if len(query) < self.MIN_QUERY:
             return Response([])
 
-        societies = (
+        findable = (
             Cooperative.objects
             .filter(Q(verification__status="verified")
                     | Q(publicly_listed=True),
-                    status=Cooperative.Status.ACTIVE, name__icontains=query)
-            .order_by("name")[:self.LIMIT]
+                    status=Cooperative.Status.ACTIVE)
+            .order_by("name")
         )
+        # The phrase first, then every society sharing a distinctive word of
+        # it. People type the name they call a society ("Digital Adashe" for
+        # "Adashe"), and several can share a word ("Adashe", "Adashe Women's
+        # Thrift"): show them all, with their LGA and state, and let the
+        # member pick theirs.
+        societies = list(findable.filter(name__icontains=query)[:self.LIMIT])
+        words = {w for w in query.lower().split()
+                 if len(w) >= self.MIN_WORD and w not in self.GENERIC_WORDS}
+        if words and len(societies) < self.LIMIT:
+            any_word = Q()
+            for word in words:
+                any_word |= Q(name__icontains=word)
+            societies += findable.filter(any_word).exclude(
+                pk__in=[s.pk for s in societies])[:self.LIMIT - len(societies)]
         return Response(PublicSocietySerializer(societies, many=True).data)
 
 
