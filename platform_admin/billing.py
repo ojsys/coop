@@ -26,20 +26,23 @@ ZERO = Decimal("0.00")
 
 
 def _add_month(d: date) -> date:
-    """One month on, clamped to the end of a short month.
-
-    31 Jan + 1 month is 28 Feb, not 3 March: a billing period that silently
-    slides forward a few days each month drifts off its own anniversary.
-    """
-    year, month = (d.year + 1, 1) if d.month == 12 else (d.year, d.month + 1)
-    return d.replace(year=year, month=month,
-                     day=min(d.day, calendar.monthrange(year, month)[1]))
+    return _add_months(d, 1)
 
 
 def _add_months(d: date, n: int) -> date:
-    for _ in range(n):
-        d = _add_month(d)
-    return d
+    """``n`` months on, clamped to the end of a short month.
+
+    31 Jan + 1 month is 28 Feb, not 3 March: a billing period that silently
+    slides forward a few days each month drifts off its own anniversary.
+
+    Computed in one step, not month by month: stepping clamps at every short
+    month on the way, so 29 Oct + 12 months came out as 28 Oct (via 28 Feb)
+    and an annual period started on the 29th–31st ended days early.
+    """
+    total = d.month - 1 + n
+    year, month = d.year + total // 12, total % 12 + 1
+    return d.replace(year=year, month=month,
+                     day=min(d.day, calendar.monthrange(year, month)[1]))
 
 
 def active_members(cooperative) -> int:
@@ -173,6 +176,10 @@ def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
 
             set_cooperative_status(coop, coop.Status.ACTIVE,
                                    verb="reactivate", actor=None)
+
+    # The cooperative's referrer, if any, earns their share. Never raises.
+    from referrals.services import credit_for_invoice
+    credit_for_invoice(invoice)
     return invoice
 
 

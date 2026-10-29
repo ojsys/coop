@@ -107,16 +107,22 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     memberships = serializers.SerializerMethodField()
     email_verified = serializers.SerializerMethodField()
+    # Refers cooperatives (referrals app). A referrer may belong to none.
+    is_referrer = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = ["id", "full_name", "email", "email_verified", "phone",
                   "national_id", "is_platform_admin", "two_factor_enabled",
-                  "memberships"]
+                  "is_referrer", "memberships"]
         read_only_fields = ["is_platform_admin"]
 
     def get_email_verified(self, obj) -> bool:
         return obj.email_verified_at is not None
+
+    def get_is_referrer(self, obj) -> bool:
+        from referrals.models import Referrer
+        return Referrer.objects.filter(user=obj).exists()
 
     def get_memberships(self, obj):
         # Unscoped: a user seeing their own memberships spans cooperatives and

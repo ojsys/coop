@@ -42,6 +42,8 @@ from ledger.models import Account, InternalTransfer, Journal, LedgerEntry
 from loans.models import Loan, LoanProduct, LoanRepayment, RepaymentInstalment
 from payments.models import (Bank, PaymentEvent, Payout, Provider,
                              ProviderAccount, WalletTopUp)
+from referrals.models import (Commission, Referral, ReferralPayout,
+                              ReferralProgram, Referrer)
 from platform_admin.models import (Domain, Incident, Invoice, LegalDocument,
                                    PlatformEmail, PlatformEmailRecipient,
                                    NotificationTemplate, OnboardingItem, Plan,
@@ -249,8 +251,9 @@ def dataset(coop, member, dues_type, member_funds):
     # Platform-level rows.
     plan = Plan.objects.create(name="Small", price_monthly=Decimal("15000.00"))
     subscription = Subscription.objects.create(cooperative=coop, plan=plan)
-    Invoice.objects.create(cooperative=coop, subscription=subscription,
-                           number="INV-0001", amount=Decimal("15000.00"))
+    invoice = Invoice.objects.create(
+        cooperative=coop, subscription=subscription, number="INV-0001",
+        amount=Decimal("15000.00"))
     OnboardingItem.objects.create(cooperative=coop)
     Domain.objects.create(cooperative=coop, domain="imole.example.africa")
     provider_status = ProviderStatus.objects.create(name="Paystack",
@@ -264,7 +267,7 @@ def dataset(coop, member, dues_type, member_funds):
     # Unpublished on purpose: a policy is pasted in stages, and a draft that is
     # invisible to visitors is the state the admin screen exists to manage.
     LegalDocument.objects.create(
-        slug="terms", title="Terms of service",
+        slug="refunds", title="Refund policy",
         body="## Scope\n\nDrafted text goes here.", published=False,
     )
 
@@ -312,6 +315,22 @@ def dataset(coop, member, dues_type, member_funds):
     MemberEmailRecipient.all_objects.create(
         cooperative=coop, email=member_email, membership=member,
         address="member@imole.test", status=MemberEmailRecipient.Status.SENT)
+
+    ReferralProgram.load()
+    referrer = Referrer.objects.create(
+        user=User.objects.create_user(email="ref@example.com",
+                                      full_name="Ref Errer"),
+        code="ABC2345", bank_name="GTBank", account_no="0123456789",
+        account_name="Ref Errer")
+    referral = Referral.objects.create(referrer=referrer, cooperative=coop,
+                                       commission_percent=Decimal("10"),
+                                       commission_months=12)
+    Commission.objects.create(referral=referral, invoice=invoice,
+                              invoice_amount=invoice.amount,
+                              percent=Decimal("10"), amount=Decimal("1500"))
+    ReferralPayout.objects.create(referrer=referrer, amount=Decimal("1500"),
+                                  bank_name="GTBank", account_no="0123456789",
+                                  account_name="Ref Errer")
 
     # Admin requests carry no tenant, so make the tests look like one.
     set_current_cooperative(None)

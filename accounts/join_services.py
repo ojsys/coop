@@ -239,7 +239,7 @@ def create_founding_admin(cooperative, *, full_name, email, phone="",
 def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
                         password, applicant_phone="", country="", state="",
                         lga="", coop_type="", estimated_members=0,
-                        message=""):
+                        message="", referral_code=""):
     """Create a cooperative that is live immediately, on its free trial.
 
     There is no approval step in front of the society any more: it is ACTIVE
@@ -282,6 +282,10 @@ def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
     record_action(cooperative=cooperative, actor=founder.user,
                   action="cooperative.signup", entity=cooperative,
                   after={"status": cooperative.status})
+
+    if referral_code:
+        from referrals.services import attach_at_signup
+        attach_at_signup(cooperative, code=referral_code, founder=founder.user)
 
     # Notifications must never roll back an accepted signup.
     transaction.on_commit(lambda: _notify_signup(

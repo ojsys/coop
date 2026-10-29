@@ -50,6 +50,9 @@ class CooperativeSignupSerializer(serializers.Serializer):
                                                  default=0)
     message = serializers.CharField(max_length=1000, required=False,
                                     allow_blank=True, default="")
+    # From a referrer's link. An unknown code is ignored, never an error.
+    referral_code = serializers.CharField(max_length=32, required=False,
+                                          allow_blank=True, default="")
 
     def validate(self, attrs):
         # Django's validators, so signup holds the same bar as a reset. Only

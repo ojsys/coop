@@ -28,6 +28,11 @@ from accounts.views import (
 from approvals.views import ApprovalRequestViewSet
 from audit.views import AuditLogViewSet
 from communications.member_mail_views import MemberEmailViewSet
+from platform_admin.legal_views import PlatformLegalDocumentViewSet
+from referrals.views import (MyPayoutRequestView, MyReferrerView,
+                             PlatformCommissionViewSet, PlatformPayoutViewSet,
+                             PlatformProgramView, PlatformReferrerViewSet,
+                             PublicProgramView, ReferrerSignupView)
 from communications.views import AnnouncementViewSet, NotificationViewSet
 from contributions.views import ContributionTypeViewSet, ContributionViewSet
 from dividends.views import DividendViewSet
@@ -148,6 +153,14 @@ router.register("domains", DomainViewSet, basename="domain")
 router.register("provider-status", ProviderStatusViewSet,
                 basename="provider-status")
 router.register("platform-team", PlatformTeamViewSet, basename="platform-team")
+router.register("platform-referrers", PlatformReferrerViewSet,
+                basename="platform-referrer")
+router.register("platform-referral-payouts", PlatformPayoutViewSet,
+                basename="platform-referral-payout")
+router.register("platform-commissions", PlatformCommissionViewSet,
+                basename="platform-commission")
+router.register("platform-legal", PlatformLegalDocumentViewSet,
+                basename="platform-legal")
 router.register("platform-emails", PlatformEmailViewSet,
                 basename="platform-email")
 router.register("platform-users", PlatformUserViewSet,
@@ -196,6 +209,9 @@ urlpatterns = [
     path("public/account-deletion/confirm/",
          PublicDeletionConfirmView.as_view(),
          name="public-account-deletion-confirm"),
+    path("public/referral-program/", PublicProgramView.as_view(),
+         name="public-referral-program"),
+    path("public/refer/", ReferrerSignupView.as_view(), name="public-refer"),
     path("public/apply/", CooperativeSignupView.as_view(),
          name="public-apply"),
     path("public/join/", JoinRequestCreateView.as_view(),
@@ -212,6 +228,11 @@ urlpatterns = [
          name="public-invoice-pay"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
     path("me/password/", PasswordChangeView.as_view(), name="me-password"),
+    path("me/referrer/", MyReferrerView.as_view(), name="me-referrer"),
+    path("me/referrer/payouts/", MyPayoutRequestView.as_view(),
+         name="me-referrer-payouts"),
+    path("platform-referral-program/", PlatformProgramView.as_view(),
+         name="platform-referral-program"),
     path("me/verify-email/", EmailVerifyResendView.as_view(),
          name="me-verify-email"),
     # A person's own data: a copy of all of it, and asking for deletion.
