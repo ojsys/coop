@@ -104,6 +104,17 @@ class Cooperative(TimeStampedModel):
     join_code = models.SlugField(max_length=50, unique=True, null=True,
                                  blank=True)
     join_link_enabled = models.BooleanField(default=True)
+    # Whether a would-be member can find the society by name on the public
+    # signup search. Verified societies are always found; this flag is for the
+    # ones the platform team already knows — every society from before
+    # self-serve signup, and those the team provisions — so their members are
+    # not held up by a KYC check that only gates money movement. A society that
+    # signed itself up starts unlisted: until someone has checked who runs it,
+    # a stranger must not find it and mistake it for the real one.
+    publicly_listed = models.BooleanField(
+        default=False,
+        help_text="Show in the member signup search before KYC is verified.",
+    )
 
     class Meta:
         ordering = ["name"]

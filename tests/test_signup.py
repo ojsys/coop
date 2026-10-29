@@ -262,6 +262,74 @@ def test_society_search_hides_unverified_societies(unverified_coop):
     assert resp.data == []
 
 
+def test_a_society_the_platform_lists_is_found_before_kyc(unverified_coop):
+    """The societies from before self-serve signup went live with KYC not
+    started; their members still have to be able to find them to join."""
+    unverified_coop.publicly_listed = True
+    unverified_coop.save()
+
+    resp = APIClient().get(SOCIETIES_URL, {"q": "Fresh Start"})
+    assert [s["id"] for s in resp.data] == [unverified_coop.id]
+
+
+def test_a_self_serve_signup_starts_unlisted(starter_plan):
+    assert _signup(society_name="Lookalike Thrift").status_code == 201
+
+    coop = Cooperative.objects.get(name="Lookalike Thrift")
+    assert coop.publicly_listed is False
+    assert APIClient().get(SOCIETIES_URL, {"q": "Lookalike"}).data == []
+
+
+def test_a_society_the_team_provisions_is_listed(db):
+    admin = User.objects.create_user(email="ops@x.test", full_name="Ops",
+                                     password="x", is_platform_admin=True)
+    client = APIClient()
+    client.force_authenticate(admin)
+
+    resp = client.post("/api/v1/cooperatives/",
+                       {"name": "Team Made Coop", "slug": "team-made"},
+                       format="json")
+
+    assert resp.status_code == 201, resp.data
+    assert Cooperative.objects.get(slug="team-made").publicly_listed is True
+
+
+def test_only_the_platform_can_change_the_listing(coop):
+    """Listing is what keeps a look-alike out of strangers' searches, so a
+    society's own officers cannot switch it on for themselves."""
+    from tenants.serializers import CooperativeUpdateSerializer
+
+    class _Req:
+        user = User(is_platform_admin=False)
+
+    serializer = CooperativeUpdateSerializer(
+        coop, data={"publicly_listed": True}, partial=True,
+        context={"request": _Req()})
+    assert serializer.is_valid(), serializer.errors
+    assert "publicly_listed" not in serializer.validated_data
+
+
+def test_the_migration_lists_existing_societies_but_not_self_serve_ones(
+        coop, unverified_coop):
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    from audit.models import AuditLog
+
+    AuditLog.all_objects.create(cooperative=unverified_coop,
+                                action="cooperative.signup")
+    Cooperative.objects.update(publicly_listed=False)
+
+    importlib.import_module(
+        "tenants.migrations.0012_publicly_listed").forwards(django_apps, None)
+
+    coop.refresh_from_db()
+    unverified_coop.refresh_from_db()
+    assert coop.publicly_listed is True
+    assert unverified_coop.publicly_listed is False
+
+
 # ── A person asking to join ─────────────────────────────────────────────────
 def test_join_request_creates_no_account(coop):
     resp = APIClient().post(JOIN_URL, {

@@ -8,6 +8,7 @@ they are throttled and validate carefully.
 """
 from __future__ import annotations
 
+from django.db.models import Q
 from django.http import Http404
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
@@ -109,10 +110,13 @@ class PublicSocietySearchView(PublicView):
 
     Search-only, never a full listing: a member needs to find their own
     society, but the platform's customer list is not something to hand out in
-    bulk. Only ACTIVE, *verified* societies appear: signup is self-serve, so
-    until the platform has checked who runs a society, a stranger searching by
-    name must not be able to find it and mistake it for the real one. Its own
-    invite link works from day one — that is how its officers bring members in.
+    bulk. Only ACTIVE societies the platform vouches for appear — verified,
+    or listed by the platform team (``publicly_listed``: the societies it
+    already knew before signup went self-serve, and those it provisions).
+    Signup is self-serve, so until someone has checked who runs a society, a
+    stranger searching by name must not be able to find it and mistake it for
+    the real one. Its own invite link works from day one — that is how its
+    officers bring members in.
     """
 
     MIN_QUERY = 2
@@ -125,8 +129,9 @@ class PublicSocietySearchView(PublicView):
 
         societies = (
             Cooperative.objects
-            .filter(status=Cooperative.Status.ACTIVE, name__icontains=query,
-                    verification__status="verified")
+            .filter(Q(verification__status="verified")
+                    | Q(publicly_listed=True),
+                    status=Cooperative.Status.ACTIVE, name__icontains=query)
             .order_by("name")[:self.LIMIT]
         )
         return Response(PublicSocietySerializer(societies, many=True).data)

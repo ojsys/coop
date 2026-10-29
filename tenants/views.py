@@ -180,7 +180,9 @@ class CooperativeViewSet(mixins.ListModelMixin,
         from platform_admin.services import start_onboarding
 
         data = serializer.validated_data
-        coop = provision_cooperative(**data)
+        # Listed in the member search at once: the team set it up, so it is
+        # not a stranger's look-alike waiting on KYC.
+        coop = provision_cooperative(**data, publicly_listed=True)
         start_onboarding(coop, owner=self.request.user)
         serializer.instance = coop
 

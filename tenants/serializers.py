@@ -25,10 +25,10 @@ class CooperativeSerializer(serializers.ModelSerializer):
                   "bank_account_name", "bank_account_no",
                   "contact_email", "contact_phone", "contact_address",
                   "statement_footer", "join_code", "join_link_enabled",
-                  "created_at"]
+                  "publicly_listed", "created_at"]
         # The cap follows the plan (Subscription.sync_member_cap); it is shown,
         # never set.
-        read_only_fields = ["status", "member_cap"]
+        read_only_fields = ["status", "member_cap", "publicly_listed"]
 
 
 class CooperativeUpdateSerializer(serializers.ModelSerializer):
@@ -52,14 +52,17 @@ class CooperativeUpdateSerializer(serializers.ModelSerializer):
                   "logo",
                   "favicon",
                   "contact_email", "contact_phone", "contact_address",
-                  "statement_footer", "join_code", "join_link_enabled"]
+                  "statement_footer", "join_code", "join_link_enabled",
+                  "publicly_listed"]
 
     _BRANDING = ("logo", "favicon", "brand_color")
     # Set by the platform, not the society: billing follows the plan's member
     # band, and a size label a society typed itself showed officers a plan
     # billing never used. (The member cap is not writable by anyone: it
     # follows the plan.)
-    _PLATFORM_ONLY = ("tier",)
+    # Search listing is the platform's call for the same reason KYC is: it is
+    # what stops a look-alike society being found by strangers.
+    _PLATFORM_ONLY = ("tier", "publicly_listed")
 
     def validate_join_code(self, value):
         """The tail of the society's invite link: /join/<code>.
