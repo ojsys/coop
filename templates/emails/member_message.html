@@ -1,0 +1,15 @@
+{% extends "emails/base.html" %}
+
+{% comment %}
+A message from a society's officers to its members, composed on the console's
+Email page. ``body_html`` is rendered by communications.member_mailing from the
+officer's plain text and is already escaped. No greeting is added here: the
+officer writes their own ("Dear {{first_name}}"), and a second would read
+twice.
+{% endcomment %}
+
+{% block preheader %}{{ subject }}{% endblock %}
+
+{% block content %}
+  {{ body_html }}
+{% endblock %}

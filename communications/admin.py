@@ -9,8 +9,9 @@ from __future__ import annotations
 from django.contrib import admin
 
 from communications.models import (Announcement, ChannelPreference,
+                                   MemberEmail, MemberEmailRecipient,
                                    Notification)
-from core.admin import TenantScopedModelAdmin
+from core.admin import TenantScopedModelAdmin, TenantScopedTabularInline
 
 
 @admin.register(ChannelPreference)
@@ -52,3 +53,47 @@ class NotificationAdmin(TenantScopedModelAdmin):
     autocomplete_fields = ("cooperative", "membership", "announcement")
     list_select_related = ("membership", "announcement", "cooperative")
     readonly_fields = ("created_at", "updated_at")
+
+
+class MemberEmailRecipientInline(TenantScopedTabularInline):
+    model = MemberEmailRecipient
+    extra = 0
+    can_delete = False
+    fields = ("address", "name", "member_no", "status", "sent_at")
+    readonly_fields = fields
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(MemberEmailRecipient)
+class MemberEmailRecipientAdmin(TenantScopedModelAdmin):
+    list_display = ("address", "email", "cooperative", "status", "sent_at")
+    list_filter = ("status", "cooperative")
+    search_fields = ("address", "member_no", "email__subject")
+    list_select_related = ("email", "cooperative")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(MemberEmail)
+class MemberEmailAdmin(TenantScopedModelAdmin):
+    """Read-only record: officers write and send these from the console's
+    Email page, which keeps the per-recipient log honest."""
+
+    list_display = ("subject", "cooperative", "purpose", "audience", "status",
+                    "sent_by", "sent_at")
+    list_filter = ("status", "purpose", "audience", "cooperative")
+    search_fields = ("subject",)
+    list_select_related = ("cooperative", "sent_by")
+    inlines = [MemberEmailRecipientInline]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

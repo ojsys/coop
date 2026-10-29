@@ -30,7 +30,9 @@ from accounts.models import (AccountDeletionRequest, JoinRequest,
                              MemberDocument, Membership, User)
 from approvals.models import ApprovalRequest
 from audit.models import AuditLog
-from communications.models import Announcement, ChannelPreference, Notification
+from communications.models import (Announcement, ChannelPreference,
+                                   MemberEmail, MemberEmailRecipient,
+                                   Notification)
 from contributions.models import Contribution
 from contributions.services import record_contribution
 from core.context import set_current_cooperative, use_tenant
@@ -304,6 +306,12 @@ def dataset(coop, member, dues_type, member_funds):
     PlatformEmailRecipient.objects.create(
         email=platform_email, cooperative=coop, address="chair@imole.test",
         status=PlatformEmailRecipient.Status.SENT)
+    member_email = MemberEmail.all_objects.create(
+        cooperative=coop, subject="Dues reminder", body="Hello {{name}}.",
+        status=MemberEmail.Status.SENT)
+    MemberEmailRecipient.all_objects.create(
+        cooperative=coop, email=member_email, membership=member,
+        address="member@imole.test", status=MemberEmailRecipient.Status.SENT)
 
     # Admin requests carry no tenant, so make the tests look like one.
     set_current_cooperative(None)

@@ -27,6 +27,7 @@ from accounts.views import (
 )
 from approvals.views import ApprovalRequestViewSet
 from audit.views import AuditLogViewSet
+from communications.member_mail_views import MemberEmailViewSet
 from communications.views import AnnouncementViewSet, NotificationViewSet
 from contributions.views import ContributionTypeViewSet, ContributionViewSet
 from dividends.views import DividendViewSet
@@ -105,6 +106,7 @@ router.register("meetings", MeetingViewSet, basename="meeting")
 router.register("attendances", AttendanceViewSet, basename="attendance")
 router.register("resolutions", ResolutionViewSet, basename="resolution")
 router.register("announcements", AnnouncementViewSet, basename="announcement")
+router.register("member-emails", MemberEmailViewSet, basename="member-email")
 router.register("notifications", NotificationViewSet, basename="notification")
 router.register("audit-logs", AuditLogViewSet, basename="audit-log")
 router.register("reports", ReportsViewSet, basename="report")
