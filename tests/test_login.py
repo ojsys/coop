@@ -85,3 +85,18 @@ def test_login_is_rate_limited(person):
     ]
 
     assert 429 in statuses, "the credential endpoint must be throttled"
+
+
+def test_a_leftover_session_does_not_block_login(person):
+    """A browser still signed in to /admin carries a session cookie. With
+    SessionAuthentication on this view DRF then demanded a CSRF token the SPA
+    never sends, and every sign-in was refused 403 (seen in production)."""
+    client = APIClient(enforce_csrf_checks=True)
+    client.force_login(person)
+
+    resp = client.post(
+        LOGIN_URL, {"username": person.email, "password": PASSWORD},
+        format="json",
+    )
+
+    assert resp.status_code == 200, resp.content

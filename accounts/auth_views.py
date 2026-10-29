@@ -41,8 +41,14 @@ class LoginView(ObtainAuthToken):
     targeted in earnest; per-IP is the blunt version, chosen here because it
     cannot be used to lock a member out of their own account by guessing at
     their address.
+
+    No authentication classes: the credentials in the body are the whole
+    authorisation. With the default SessionAuthentication, a browser still
+    holding a Django session (signed in to /admin, say) had DRF enforce CSRF
+    here, and the SPA — which sends no CSRF token — could not sign in at all.
     """
 
+    authentication_classes: list = []
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "login"
 
