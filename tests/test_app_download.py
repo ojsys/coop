@@ -189,3 +189,17 @@ def test_no_android_link_when_there_is_nothing_to_download(client, site):
     apps = client.get("/api/v1/public/site-content/").json()["apps"]
 
     assert apps["android_url"] is None
+
+
+def test_a_side_loaded_apk_is_labelled_a_direct_download(client, site):
+    """The page must not imply a Play Store app that does not exist."""
+    site.android_apk = "site_apps/CooperativeOS.apk"
+    site.android_store_url = ""
+    site.save(update_fields=["android_apk", "android_store_url"])
+    assert client.get("/api/v1/public/site-content/").json()[
+        "apps"]["android_direct"] is True
+
+    site.android_store_url = "https://play.google.com/store/apps/details?id=x"
+    site.save(update_fields=["android_store_url"])
+    assert client.get("/api/v1/public/site-content/").json()[
+        "apps"]["android_direct"] is False

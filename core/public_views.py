@@ -249,6 +249,10 @@ class PublicSiteContentView(PublicView):
                                 kwargs={"platform": "android"}))
                     if (content.android_store_url or content.android_apk)
                     else None),
+                # A side-loaded APK, not a store listing: the page must say
+                # so rather than imply the app is on Google Play.
+                "android_direct": bool(content.android_apk
+                                       and not content.android_store_url),
                 "ios_url": (
                     request.build_absolute_uri(
                         reverse("public-app-download",

@@ -868,8 +868,9 @@ class SiteContent(TimeStampedModel):
     # ── How it works ────────────────────────────────────────────────────────
     steps_intro = models.TextField(
         blank=True,
-        default="From your first conversation with us to members checking "
-                "their own statements — usually six to ten weeks.",
+        default="You're live the day you sign up. If we're moving years of "
+                "records across for you, that part usually takes six to ten "
+                "weeks — and you use the platform while it happens.",
     )
 
     # ── Mobile apps ─────────────────────────────────────────────────────────

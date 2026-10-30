@@ -128,12 +128,9 @@ def attach_by_platform(cooperative, *, referrer, actor) -> Referral:
     if Referral.objects.filter(cooperative=cooperative).exists():
         raise ReferralError(f"{cooperative.name} is already credited to a "
                             "referrer.")
-    from accounts.models import Membership
-
-    if Membership.all_objects.filter(cooperative=cooperative,
-                                     user=referrer.user).exists():
-        raise ReferralError("A referrer cannot be credited with their own "
-                            "cooperative.")
+    if holds_office(referrer.user, cooperative):
+        raise ReferralError("A referrer cannot be credited with a cooperative "
+                            "they hold office in.")
     referral = Referral.objects.create(referrer=referrer,
                                        cooperative=cooperative,
                                        source="platform", **_terms())
@@ -142,6 +139,21 @@ def attach_by_platform(cooperative, *, referrer, actor) -> Referral:
                   after={"cooperative": cooperative.name,
                          "referrer": referrer.code})
     return referral
+
+
+def holds_office(user, cooperative) -> bool:
+    """An officer of the society, who may not earn from it (Terms §7).
+
+    A plain member may: someone who belongs to one society and brings in
+    another is exactly who the program is for.
+    """
+    from accounts.models import Membership
+
+    memberships = (Membership.all_objects
+                   .filter(cooperative=cooperative, user=user,
+                           status=Membership.Status.ACTIVE)
+                   .select_related("role"))
+    return any(m.role is not None and m.role.is_officer for m in memberships)
 
 
 def window_end(referral) -> date | None:
@@ -192,6 +204,15 @@ def _credit(invoice) -> Commission | None:
               / Decimal("100")).quantize(CENT, rounding=ROUND_HALF_UP)
     if amount <= 0:
         return None
+    # Checked at each payment, not only at signup: a referrer who takes an
+    # office later stops earning from then on. The row stays, void, so both
+    # sides can see why.
+    if holds_office(referral.referrer.user, invoice.cooperative):
+        return Commission.objects.create(
+            referral=referral, invoice=invoice, invoice_amount=invoice.amount,
+            percent=referral.commission_percent, amount=amount,
+            status=Commission.Status.VOID,
+            void_reason="The referrer holds office in this cooperative.")
     commission = Commission.objects.create(
         referral=referral, invoice=invoice, invoice_amount=invoice.amount,
         percent=referral.commission_percent, amount=amount)

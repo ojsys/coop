@@ -19,7 +19,7 @@ from django.core.cache import cache
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import User
+from accounts.models import Membership, Role, User
 from platform_admin.billing import settle_invoice
 from platform_admin.models import Invoice, Plan, Subscription
 from referrals import services
@@ -208,6 +208,37 @@ def test_a_voided_commission_leaves_the_balance(referred, referrer):
     settle_invoice(_invoice(referred))
     services.void_commission(Commission.objects.get(), reason="Refunded",
                              actor=None)
+    assert services.totals(referrer)["available"] == 0
+
+
+def _join(coop, user, *, officer):
+    role = Role.all_objects.create(
+        cooperative=coop, slug="officer" if officer else "plain",
+        name="Treasurer" if officer else "Member",
+        permissions=(["governance.approve", "reports.view"] if officer
+                     else sorted(Role.MEMBER_PERMISSIONS)))
+    return Membership.all_objects.create(cooperative=coop, user=user,
+                                         member_no=f"R-{role.pk}", role=role)
+
+
+def test_a_plain_member_may_refer_their_own_society(coop, referrer):
+    _join(coop, referrer.user, officer=False)
+    assert services.attach_by_platform(coop, referrer=referrer, actor=None)
+
+
+def test_an_officer_may_not_be_credited_with_their_society(coop, referrer):
+    _join(coop, referrer.user, officer=True)
+    with pytest.raises(services.ReferralError):
+        services.attach_by_platform(coop, referrer=referrer, actor=None)
+
+
+def test_taking_office_later_stops_the_earning(referred, referrer):
+    _join(referred, referrer.user, officer=True)
+    settle_invoice(_invoice(referred))
+
+    commission = Commission.objects.get()
+    assert commission.status == Commission.Status.VOID
+    assert "office" in commission.void_reason
     assert services.totals(referrer)["available"] == 0
 
 
