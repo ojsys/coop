@@ -56,7 +56,9 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
         show a different picture from the invoice.
         """
         from core.entitlements import features_for, in_grace, subscription_for
-        from platform_admin.billing import active_members
+        from platform_admin.billing import (
+            active_members, is_lapsed,
+        )
 
         sub = subscription_for(obj.cooperative)
         plan = sub.plan if sub else None
@@ -77,6 +79,27 @@ class MembershipSummarySerializer(serializers.ModelSerializer):
             "cycle_amount": str(amount) if amount is not None else None,
             "status": sub.status if sub else None,
             "renews_on": sub.current_period_end if sub else None,
+            # The console locks down to renewing while this is true.
+            "lapsed": is_lapsed(sub),
+            "open_invoice": self._open_invoice(obj),
+        }
+
+    def _open_invoice(self, obj):
+        from platform_admin.billing import outstanding_invoice
+
+        invoice = outstanding_invoice(obj.cooperative)
+        if invoice is None:
+            return None
+        privileged = bool(obj.role and obj.role.is_privileged)
+        return {
+            "number": invoice.number,
+            "period_label": invoice.period_label,
+            "amount": str(invoice.amount),
+            "currency": invoice.currency,
+            "status": invoice.status,
+            "due_at": invoice.due_at,
+            # The pay link opens checkout, so only those who can pay get it.
+            "pay_token": invoice.pay_token if privileged else None,
         }
 
     def to_representation(self, instance):

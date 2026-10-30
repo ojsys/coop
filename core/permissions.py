@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from django.conf import settings
 from rest_framework import permissions
+from rest_framework.exceptions import PermissionDenied
 
 from core.tenancy import resolve_cooperative
 
@@ -85,6 +86,43 @@ def is_office_holder(user, request=None, *, requested_id=None) -> bool:
     )
 
 
+class SubscriptionLapsed(PermissionDenied):
+    """Raised (as HTTP 403) when an officer acts while the society is unpaid."""
+
+    default_code = "subscription_lapsed"
+
+
+def refuse_if_lapsed(user, request) -> None:
+    """Stop officer actions while the society's subscription has lapsed.
+
+    Reads stay open, so nothing a society recorded is hidden from it, and the
+    renewal itself goes through its own endpoint. Platform admins are exempt:
+    they are who fixes a billing mistake.
+    """
+    from platform_admin.billing import is_lapsed
+    from platform_admin.models import Subscription
+
+    if user.is_platform_admin:
+        return
+    cooperative = resolve_cooperative(
+        user, request.META.get(settings.TENANT_HEADER))
+    if cooperative is None:
+        return
+    sub = Subscription.objects.filter(cooperative=cooperative).first()
+    if is_lapsed(sub):
+        raise SubscriptionLapsed(
+            f"{cooperative.name}'s subscription has ended. Renew it from the "
+            f"console dashboard to carry on.")
+
+
+def can_write(user, request) -> bool:
+    """A privileged officer, in a society whose subscription is paid up."""
+    if not is_privileged_officer(user, request):
+        return False
+    refuse_if_lapsed(user, request)
+    return True
+
+
 class IsPrivilegedOfficerOrOfficeHolderReadOnly(permissions.BasePermission):
     """Office-holders may read; only privileged officers may write.
 
@@ -102,14 +140,16 @@ class IsPrivilegedOfficerOrOfficeHolderReadOnly(permissions.BasePermission):
     def has_permission(self, request, view):
         if request.method in permissions.SAFE_METHODS:
             return is_office_holder(request.user, request)
-        return is_privileged_officer(request.user, request)
+        return can_write(request.user, request)
 
 
 class IsPrivilegedOfficer(permissions.BasePermission):
     """Only a privileged officer of the active cooperative (or a platform admin)."""
 
     def has_permission(self, request, view):
-        return is_privileged_officer(request.user, request)
+        if request.method in permissions.SAFE_METHODS:
+            return is_privileged_officer(request.user, request)
+        return can_write(request.user, request)
 
 
 class IsPrivilegedOfficerOrReadOnly(permissions.BasePermission):
@@ -126,4 +166,4 @@ class IsPrivilegedOfficerOrReadOnly(permissions.BasePermission):
             return False
         if request.method in permissions.SAFE_METHODS:
             return True
-        return is_privileged_officer(user, request)
+        return can_write(user, request)

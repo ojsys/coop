@@ -183,6 +183,59 @@ def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
     return invoice
 
 
+# ── The console's view of a renewal ─────────────────────────────────────────
+LAPSED_STATUSES = (Subscription.Status.PAST_DUE, Subscription.Status.CANCELED)
+
+
+def is_lapsed(subscription, *, today: date | None = None) -> bool:
+    """Whether the society has stopped paying for the console.
+
+    Past due or cancelled, or a free trial whose end has come without a paid
+    invoice. An active subscription at the start of a new period is *not*
+    lapsed: its invoice has days to run before it is due, and a society that
+    pays every month should not be locked out on every renewal day.
+    """
+    if subscription is None:
+        return False
+    if subscription.status in LAPSED_STATUSES:
+        return True
+    today = today or timezone.localdate()
+    return (subscription.status == Subscription.Status.TRIAL
+            and subscription.current_period_end is not None
+            and subscription.current_period_end <= today)
+
+
+def outstanding_invoice(cooperative) -> Invoice | None:
+    return _outstanding(cooperative).order_by("issued_at", "id").first()
+
+
+def renewal_invoice(cooperative, *, today: date | None = None) -> Invoice:
+    """The invoice an officer pays to renew, raising one if none is open.
+
+    The daily cycle normally raises it. This covers the gap before the cycle
+    has run, and a cancelled subscription, which the cycle never invoices.
+    A cancelled one restarts from today rather than billing the months it
+    was switched off.
+    """
+    from django.db import transaction
+
+    today = today or timezone.localdate()
+    with transaction.atomic():
+        sub = (Subscription.objects.select_for_update()
+               .select_related("plan", "cooperative")
+               .filter(cooperative=cooperative).first())
+        if sub is None:
+            raise UnpricedSubscription(
+                f"{cooperative.name} is not on a plan yet.")
+        invoice = outstanding_invoice(cooperative)
+        if invoice is not None:
+            return invoice
+        if sub.status == Subscription.Status.CANCELED:
+            sub.current_period_end = today
+            sub.save(update_fields=["current_period_end", "updated_at"])
+        return open_invoice(sub, today=today)
+
+
 def _needs_reminder(cutoff):
     """Invoices never reminded about, or not reminded since ``cutoff``."""
     from django.db.models import Q

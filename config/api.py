@@ -71,6 +71,7 @@ from reports.views import ReportsViewSet
 from savings.views import (SavingsGoalViewSet, SavingsProductViewSet,
                           WithdrawalViewSet)
 from platform_admin.mailing_views import PlatformEmailViewSet
+from platform_admin.renew_views import SubscriptionRenewView
 from tenants.verification_views import (
     CooperativeDocumentViewSet, PlatformVerificationViewSet,
     VerificationViewSet,
@@ -226,6 +227,8 @@ urlpatterns = [
          name="public-invoice-verify"),
     path("public/invoice/<str:pay_token>/", InvoicePayView.as_view(),
          name="public-invoice-pay"),
+    path("subscription/renew/", SubscriptionRenewView.as_view(),
+         name="subscription-renew"),
     path("me/profile/", MemberProfileView.as_view(), name="me-profile"),
     path("me/password/", PasswordChangeView.as_view(), name="me-password"),
     path("me/referrer/", MyReferrerView.as_view(), name="me-referrer"),
