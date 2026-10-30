@@ -14,7 +14,9 @@ from rest_framework.views import APIView
 from core.context import get_current_cooperative
 from core.permissions import is_privileged_officer
 from core.views import TenantScopedViewMixin
-from platform_admin.billing import UnpricedSubscription, renewal_invoice
+from platform_admin.billing import (
+    UnpricedSubscription, recheck_invoice, renewal_invoice,
+)
 
 
 class CanRenew(permissions.BasePermission):
@@ -34,6 +36,8 @@ class SubscriptionRenewView(TenantScopedViewMixin, APIView):
                 {"detail": f"{exc} Contact us and we will send a quote."},
                 status=400)
         return Response({
+            # Already paid, its confirmation late: nothing to pay.
+            "paid": recheck_invoice(invoice),
             "number": invoice.number,
             "period_label": invoice.period_label,
             "amount": str(invoice.amount),

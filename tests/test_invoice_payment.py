@@ -175,3 +175,180 @@ def test_the_pay_response_carries_the_reference(invoice):
     assert resp.status_code == 200, resp.content
     invoice.refresh_from_db()
     assert resp.json()["reference"] == invoice.psp_reference
+
+
+# ── Settling without anyone marking it paid ─────────────────────────────────
+def _invoice_webhook(reference, amount, event_id="evt-sub-1", subaccount=None):
+    import hashlib
+    import hmac
+    import json
+
+    from django.conf import settings
+
+    from payments.services import ingest_webhook
+
+    data = {"id": event_id, "reference": reference,
+            "amount": int(Decimal(amount) * 100), "currency": "NGN",
+            "status": "success"}
+    if subaccount:
+        data["subaccount"] = {"subaccount_code": subaccount}
+    body = json.dumps({"event": "charge.success", "data": data}).encode()
+    sig = hmac.new(settings.PAYSTACK_SECRET_KEY.encode(), body,
+                   hashlib.sha512).hexdigest()
+    return ingest_webhook(provider_name="paystack", raw_body=body,
+                          headers={"x-paystack-signature": sig})
+
+
+def _checkout(invoice):
+    APIClient().post(pay_url(invoice.pay_token), {}, format="json")
+    invoice.refresh_from_db()
+    return invoice.psp_reference
+
+
+def test_the_webhook_settles_the_invoice_and_reopens_the_console(invoice):
+    from payments.models import PaymentEvent
+    from platform_admin.billing import is_lapsed
+    from platform_admin.models import Subscription
+
+    sub = invoice.subscription
+    sub.status = Subscription.Status.PAST_DUE
+    sub.save(update_fields=["status"])
+    end = sub.current_period_end
+
+    event = _invoice_webhook(_checkout(invoice), "10000")
+
+    invoice.refresh_from_db()
+    sub.refresh_from_db()
+    assert invoice.status == Invoice.Status.PAID
+    assert sub.status == Subscription.Status.ACTIVE
+    assert not is_lapsed(sub)
+    assert sub.current_period_end > end
+    assert event.status == PaymentEvent.Status.MATCHED
+    # Platform billing stays out of the society's own reconciliation.
+    assert event.cooperative_id is None
+
+
+def test_a_replayed_webhook_does_not_roll_the_period_twice(invoice):
+    reference = _checkout(invoice)
+    _invoice_webhook(reference, "10000")
+    invoice.subscription.refresh_from_db()
+    end = invoice.subscription.current_period_end
+
+    _invoice_webhook(reference, "10000", event_id="evt-sub-2")
+    APIClient().post(VERIFY_URL, {"reference": reference}, format="json")
+
+    invoice.subscription.refresh_from_db()
+    assert invoice.subscription.current_period_end == end
+
+
+def test_a_short_charge_is_left_for_the_platform_team(invoice):
+    from payments.models import PaymentEvent
+
+    event = _invoice_webhook(_checkout(invoice), "1")
+
+    invoice.refresh_from_db()
+    assert invoice.status != Invoice.Status.PAID
+    assert event.status == PaymentEvent.Status.PARTIAL
+
+
+def test_a_charge_to_a_society_subaccount_does_not_settle(invoice):
+    _invoice_webhook(_checkout(invoice), "10000", subaccount="ACCT_x")
+    invoice.refresh_from_db()
+    assert invoice.status != Invoice.Status.PAID
+
+
+def test_verify_refuses_a_short_charge(invoice, monkeypatch):
+    from payments.providers import PaystackProvider
+
+    monkeypatch.setattr(
+        PaystackProvider, "fetch_transaction",
+        lambda self, ref: {"success": True, "status": "success",
+                           "amount": Decimal("1"), "fee": Decimal("0"),
+                           "subaccount": False})
+    reference = _checkout(invoice)
+
+    resp = APIClient().post(VERIFY_URL, {"reference": reference},
+                            format="json")
+
+    assert resp.json()["paid"] is False
+
+
+def test_reopening_the_link_finds_a_payment_whose_return_was_lost(
+        invoice, monkeypatch, settings):
+    """Paid, closed the browser, no webhook: the link itself recovers it."""
+    from payments.providers import PaystackProvider
+
+    reference = _checkout(invoice)
+    settings.PAYSTACK_SECRET_KEY = "sk_test_real_looking"
+    monkeypatch.setattr(
+        PaystackProvider, "fetch_transaction",
+        lambda self, ref: {"success": ref == reference, "status": "success",
+                           "amount": Decimal("10000"), "fee": Decimal("0"),
+                           "subaccount": False})
+
+    body = APIClient().get(pay_url(invoice.pay_token)).json()
+
+    assert body["payable"] is False
+    invoice.refresh_from_db()
+    assert invoice.status == Invoice.Status.PAID
+
+
+def test_the_daily_cycle_settles_a_lost_payment_before_chasing_it(
+        invoice, monkeypatch, settings):
+    from payments.providers import PaystackProvider
+
+    reference = _checkout(invoice)
+    settings.PAYSTACK_SECRET_KEY = "sk_test_real_looking"
+    monkeypatch.setattr(
+        PaystackProvider, "fetch_transaction",
+        lambda self, ref: {"success": True, "status": "success",
+                           "amount": Decimal("10000"), "fee": Decimal("0"),
+                           "subaccount": False})
+
+    report = run_billing_cycle(
+        today=timezone.localdate() + timedelta(days=60))
+
+    assert report["rechecked"] == [invoice.number]
+    assert report["suspended"] == []
+
+
+def test_the_return_address_is_this_pay_page(invoice, monkeypatch):
+    from payments.providers import PaystackProvider
+
+    seen = {}
+
+    def fake_init(self, **kwargs):
+        seen.update(kwargs)
+        return "https://checkout.example/x"
+
+    monkeypatch.setattr(PaystackProvider, "initialize_transaction", fake_init)
+    APIClient().post(pay_url(invoice.pay_token),
+                     {"callback_url": "https://evil.example/"}, format="json")
+
+    assert seen["callback_url"].endswith(f"/billing/pay/{invoice.pay_token}")
+    assert "evil" not in seen["callback_url"]
+
+
+def test_the_platform_team_can_ask_paystack_before_marking_paid(
+        invoice, monkeypatch, settings):
+    from accounts.models import User
+    from payments.providers import PaystackProvider
+
+    admin = User.objects.create_user(email="ops@platform.test",
+                                     full_name="Ops", password="x",
+                                     is_platform_admin=True)
+    _checkout(invoice)
+    settings.PAYSTACK_SECRET_KEY = "sk_test_real_looking"
+    monkeypatch.setattr(
+        PaystackProvider, "fetch_transaction",
+        lambda self, ref: {"success": True, "status": "success",
+                           "amount": Decimal("10000"), "fee": Decimal("0"),
+                           "subaccount": False})
+    client = APIClient()
+    client.force_authenticate(admin)
+
+    resp = client.post(f"/api/v1/invoices/{invoice.pk}/recheck/")
+
+    assert resp.status_code == 200, resp.content
+    assert resp.json()["paid"] is True
+    assert resp.json()["status"] == "paid"

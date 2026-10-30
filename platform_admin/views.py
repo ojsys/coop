@@ -80,6 +80,19 @@ class InvoiceViewSet(PlatformViewSetBase):
         invoice = settle_invoice(self.get_object())
         return Response(self.get_serializer(invoice).data)
 
+    @action(detail=True, methods=["post"])
+    def recheck(self, request, pk=None):
+        """Ask Paystack about a payment that was not confirmed automatically.
+
+        The step before marking paid by hand: it settles only what Paystack
+        confirms in full, exactly as the webhook would have.
+        """
+        from platform_admin.billing import recheck_invoice
+
+        invoice = self.get_object()
+        paid = recheck_invoice(invoice)
+        return Response({**self.get_serializer(invoice).data, "paid": paid})
+
 
 class OnboardingItemViewSet(PlatformViewSetBase):
     serializer_class = OnboardingItemSerializer

@@ -65,9 +65,14 @@ class InvoicePayView(APIView):
             # membership oracle.
             return Response({"detail": "That payment link is not valid."},
                             status=404)
+        # Someone back on the link after paying, whose confirmation went
+        # astray: ask Paystack, so the page shows the truth and they are in.
+        from platform_admin.billing import recheck_invoice
+        recheck_invoice(invoice)
         return Response(self._summary(invoice))
 
     def post(self, request, pay_token=None):
+        from communications.email import _absolute
         from payments.providers import PaymentInitError
         from payments.services import initialize_invoice_payment
 
@@ -96,7 +101,10 @@ class InvoicePayView(APIView):
         try:
             payload["authorization_url"] = initialize_invoice_payment(
                 invoice, email=email,
-                callback_url=request.data.get("callback_url"),
+                # Back to this pay page, which confirms the payment on
+                # return. Built here, never taken from the request: a payer
+                # must not be sendable anywhere else.
+                callback_url=_absolute(f"/billing/pay/{invoice.pay_token}"),
             )
         except PaymentInitError as exc:
             # Surface the gateway's own reason; the invoice stands and they

@@ -152,9 +152,22 @@ def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
     Paystack verification, so a bank transfer and a card payment leave the
     account in exactly the same state.
     """
-    paid_on = paid_on or timezone.localdate()
+    from django.db import transaction
+
+    with transaction.atomic():
+        # Locked, because the browser return and the webhook arrive within
+        # moments of each other: settling twice would roll the subscription
+        # on two periods for one payment.
+        locked = Invoice.objects.select_for_update().get(pk=invoice.pk)
+        _settle_locked(locked, paid_on or timezone.localdate())
+    # The caller's instance, brought up to date, so it reads as paid.
+    invoice.refresh_from_db()
+    return invoice
+
+
+def _settle_locked(invoice, paid_on):
     if invoice.status == Invoice.Status.PAID:
-        return invoice
+        return
 
     invoice.status = Invoice.Status.PAID
     invoice.paid_at = paid_on
@@ -180,7 +193,6 @@ def settle_invoice(invoice, *, paid_on: date | None = None) -> Invoice:
     # The cooperative's referrer, if any, earns their share. Never raises.
     from referrals.services import credit_for_invoice
     credit_for_invoice(invoice)
-    return invoice
 
 
 # ── The console's view of a renewal ─────────────────────────────────────────
@@ -234,6 +246,33 @@ def renewal_invoice(cooperative, *, today: date | None = None) -> Invoice:
             sub.current_period_end = today
             sub.save(update_fields=["current_period_end", "updated_at"])
         return open_invoice(sub, today=today)
+
+
+def recheck_invoice(invoice) -> bool:
+    """Ask Paystack whether an unsettled invoice was in fact paid.
+
+    For a payment whose webhook never arrived and whose payer closed the
+    browser before returning. Only an invoice that reached checkout has a
+    reference to ask about. Returns whether it is now paid; never raises, so
+    a Paystack outage cannot break the page or the cycle that asked.
+    """
+    from payments.providers import PaymentInitError
+    from payments.services import verify_invoice_payment
+
+    if invoice.is_settled or not invoice.psp_reference:
+        return invoice.status == Invoice.Status.PAID
+    # The dev placeholder key reports every charge as a success, which would
+    # settle each invoice that merely reached checkout. Only a real key is
+    # worth asking.
+    secret = settings.PAYSTACK_SECRET_KEY
+    if not secret or secret.startswith("sk_test_dev"):
+        return False
+    try:
+        verify_invoice_payment(invoice.psp_reference)
+    except PaymentInitError:
+        return False
+    invoice.refresh_from_db(fields=["status"])
+    return invoice.status == Invoice.Status.PAID
 
 
 def _needs_reminder(cutoff):
@@ -295,9 +334,19 @@ def run_billing_cycle(*, dry_run: bool = False, cooperative=None,
     from tenants.services import set_cooperative_status
 
     today = today or timezone.localdate()
-    report = {"trial_reminded": [], "issued": [], "reminded": [],
+    report = {"rechecked": [], "trial_reminded": [], "issued": [],
+              "reminded": [],
               "overdue": [], "suspended": [], "unpriced": [],
               "dry_run": dry_run}
+
+    # Before anything else: invoices someone paid whose confirmation went
+    #    astray. Settling them first stops the steps below reminding, marking
+    #    overdue or suspending a society that has paid.
+    for invoice in _outstanding(cooperative).exclude(psp_reference=""):
+        if dry_run:
+            continue
+        if recheck_invoice(invoice):
+            report["rechecked"].append(invoice.number)
 
     # 0. Trials about to end are told so, at a week, three days and a day out.
     for sub, days_left in _trials_due_a_reminder(today, cooperative):

@@ -14,6 +14,7 @@ and classifies the outcome so exceptions surface for manual resolution:
 from __future__ import annotations
 
 import json
+import logging
 
 from django.db import transaction
 
@@ -26,6 +27,8 @@ from payments.fees import accepts_paid_amount, gross_up
 from payments.providers import (
     NormalizedEvent, PaymentInitError, WebhookVerificationError, get_provider,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WebhookError(Exception):
@@ -1077,6 +1080,11 @@ def ingest_webhook(*, provider_name: str, raw_body: bytes, headers) -> PaymentEv
     if existing is not None:
         return existing
 
+    # A subscription invoice: the platform's own billing, settled here so a
+    # society is back in its console without anyone marking it paid.
+    if event.reference.startswith("SUB-"):
+        return handle_invoice_event(event=event, payload=payload)
+
     cooperative = _resolve_cooperative(event)
     payment = PaymentEvent(
         cooperative=cooperative,
@@ -1337,12 +1345,14 @@ def initialize_invoice_payment(invoice, *, email, callback_url=None):
 
 
 def verify_invoice_payment(reference):
-    """Confirm a subscription payment and settle the invoice. Idempotent.
+    """Confirm a subscription payment with Paystack and settle it. Idempotent.
 
-    Returns the invoice (unchanged if the charge did not succeed), or ``None``
-    when the reference matches nothing — a stale or forged return URL.
+    The one automatic path, used by the browser return, the reopened pay link
+    and the daily billing cycle. The Paystack webhook settles through
+    :func:`settle_invoice_charge` with the amount it was sent. Returns the
+    invoice (unchanged if the charge did not succeed), or ``None`` when the
+    reference matches nothing — a stale or forged return URL.
     """
-    from platform_admin.billing import settle_invoice
     from platform_admin.models import Invoice
 
     invoice = Invoice.objects.filter(psp_reference=reference).first()
@@ -1351,10 +1361,72 @@ def verify_invoice_payment(reference):
     if invoice.status == Invoice.Status.PAID:
         return invoice
 
-    provider = get_provider(Provider.PAYSTACK)
-    if not provider.verify_transaction(reference):
+    detail = get_provider(Provider.PAYSTACK).fetch_transaction(reference)
+    if not detail or not detail.get("success"):
         return invoice
-    return settle_invoice(invoice)
+    settle_invoice_charge(invoice, amount=detail.get("amount"),
+                          to_subaccount=detail.get("subaccount", False))
+    return invoice
+
+
+def settle_invoice_charge(invoice, *, amount, to_subaccount=False) -> bool:
+    """Settle ``invoice`` from a successful Paystack charge, if it covers it.
+
+    The amount is checked here because the on-page checkout takes its amount
+    from the browser: trusting "a charge succeeded" alone would let ₦1 settle
+    any invoice. A short charge, or one split to a society's own subaccount,
+    is left for the platform team to resolve by hand. ``amount`` is ``None``
+    only on the dev placeholder key, where nothing is really charged.
+    """
+    from platform_admin.billing import settle_invoice
+
+    if to_subaccount:
+        logger.warning("Invoice %s: charge went to a subaccount; not settled.",
+                       invoice.number)
+        return False
+    if amount is not None and amount < invoice.amount:
+        logger.warning("Invoice %s: charged %s of %s; not settled.",
+                       invoice.number, amount, invoice.amount)
+        return False
+    settle_invoice(invoice)
+    return True
+
+
+def handle_invoice_event(*, event, payload) -> PaymentEvent:
+    """Apply a ``charge.success`` webhook for a subscription invoice.
+
+    Branched out of ``ingest_webhook`` before tenant routing: the platform
+    billing the society is not money the society collected, so it has no place
+    in that society's reconciliation. Recorded with no cooperative, which also
+    makes a replayed event a no-op.
+    """
+    from platform_admin.models import Invoice
+
+    invoice = Invoice.objects.filter(psp_reference=event.reference).first()
+    payment = PaymentEvent(
+        cooperative=None, provider=event.provider, event_id=event.event_id,
+        reference=event.reference, amount=event.amount,
+        currency=event.currency, payload=payload,
+    )
+    if invoice is None:
+        payment.status = PaymentEvent.Status.UNMATCHED
+        payment.note = "Subscription reference matches no invoice."
+    elif not event.success:
+        payment.status = PaymentEvent.Status.IGNORED
+        payment.note = f"Non-success event for invoice {invoice.number}."
+    elif invoice.status == Invoice.Status.PAID:
+        payment.status = PaymentEvent.Status.DUPLICATE
+        payment.note = f"Invoice {invoice.number} was already paid."
+    elif settle_invoice_charge(invoice, amount=event.amount,
+                               to_subaccount=bool(event.subaccount_code)):
+        payment.status = PaymentEvent.Status.MATCHED
+        payment.note = f"Settled subscription invoice {invoice.number}."
+    else:
+        payment.status = PaymentEvent.Status.PARTIAL
+        payment.note = (f"Charge does not cover invoice {invoice.number} "
+                        f"({invoice.amount}); left for the platform team.")
+    payment.save()
+    return payment
 
 
 # ── Settlements that never came through a webhook ───────────────────────────

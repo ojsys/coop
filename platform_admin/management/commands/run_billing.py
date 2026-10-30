@@ -50,7 +50,8 @@ class Command(BaseCommand):
         report = run_billing_cycle(dry_run=dry_run, cooperative=coop)
 
         verb = "would be" if dry_run else "were"
-        for key, label in (("issued", "invoiced"), ("overdue", "marked overdue"),
+        for key, label in (("rechecked", "settled after checking Paystack"),
+                           ("issued", "invoiced"), ("overdue", "marked overdue"),
                            ("reminded", "reminded"), ("suspended", "SUSPENDED")):
             rows = report[key]
             if not rows:
@@ -67,8 +68,8 @@ class Command(BaseCommand):
             for row in report["unpriced"]:
                 self.stdout.write(f"  - {row}")
 
-        if not any(report[k] for k in ("issued", "overdue", "reminded",
-                                       "suspended", "unpriced")):
+        if not any(report[k] for k in ("rechecked", "issued", "overdue",
+                                       "reminded", "suspended", "unpriced")):
             self.stdout.write("Nothing due. No invoices, reminders or "
                               "suspensions.")
             return
