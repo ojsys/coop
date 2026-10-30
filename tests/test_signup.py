@@ -237,6 +237,11 @@ def test_signup_is_throttled():
 
 
 # ── Society search ──────────────────────────────────────────────────────────
+def _rename(coop, name):
+    coop.name = name
+    coop.save(update_fields=["name"])
+
+
 def test_society_search_needs_a_real_query(coop):
     assert APIClient().get(SOCIETIES_URL).data == []
     assert APIClient().get(SOCIETIES_URL, {"q": "a"}).data == []
@@ -274,19 +279,29 @@ def test_society_search_finds_a_society_by_a_word_of_what_people_call_it(
         coop):
     """Seen in production: "Digital Adashe" found nothing, because the
     society is registered as "Adashe"."""
-    Cooperative.objects.filter(pk=coop.pk).update(name="Adashe")
+    _rename(coop, "Adashe")
 
     resp = APIClient().get(SOCIETIES_URL, {"q": "Digital Adashe"})
 
     assert [s["id"] for s in resp.data] == [coop.id]
 
 
+def test_society_search_ignores_accents_and_tone_marks(coop):
+    """Members type "Imole" on a phone keyboard for a society registered with
+    its Yoruba tone marks, and the reverse."""
+    _rename(coop, "Ìmọ̀lè Multipurpose CS")
+
+    assert [s["id"] for s in APIClient().get(
+        SOCIETIES_URL, {"q": "imole"}).data] == [coop.id]
+    assert [s["id"] for s in APIClient().get(
+        SOCIETIES_URL, {"q": "Ìmọ̀lè"}).data] == [coop.id]
+
+
 def test_society_search_shows_every_society_sharing_a_name(coop, other_coop):
     """Two societies both called something "Adashe": the member sees both,
     the exact phrase match first, and picks theirs by LGA and state."""
-    Cooperative.objects.filter(pk=coop.pk).update(name="Digital Adashe")
-    Cooperative.objects.filter(pk=other_coop.pk).update(
-        name="Adashe Women Thrift")
+    _rename(coop, "Digital Adashe")
+    _rename(other_coop, "Adashe Women Thrift")
 
     exact = APIClient().get(SOCIETIES_URL, {"q": "Digital Adashe"}).data
     word = APIClient().get(SOCIETIES_URL, {"q": "adashe"}).data
@@ -299,8 +314,7 @@ def test_society_search_does_not_list_every_cooperative_on_a_generic_word(
         coop):
     """The word fallback skips words almost every name carries, or the search
     would hand out the platform's customer list."""
-    Cooperative.objects.filter(pk=coop.pk).update(
-        name="Plateau Farmers Cooperative Society")
+    _rename(coop, "Plateau Farmers Cooperative Society")
 
     resp = APIClient().get(SOCIETIES_URL, {"q": "Digital Cooperative Society"})
 

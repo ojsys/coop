@@ -26,7 +26,7 @@ from accounts.join_services import (
 from core.permissions import IsPrivilegedOfficer
 from core.public_views import PublicView
 from core.views import TenantScopedViewMixin
-from tenants.models import Cooperative
+from tenants.models import Cooperative, fold
 
 
 # ── Public: a society signing up to the platform ────────────────────────────
@@ -146,13 +146,17 @@ class PublicSocietySearchView(PublicView):
         # "Adashe"), and several can share a word ("Adashe", "Adashe Women's
         # Thrift"): show them all, with their LGA and state, and let the
         # member pick theirs.
-        societies = list(findable.filter(name__icontains=query)[:self.LIMIT])
-        words = {w for w in query.lower().split()
+        # Compared without accents or tone marks on either side, so "Imole"
+        # finds "Ìmọ̀lè" and "Ìmọ̀lè" finds "Imole".
+        query = fold(query)
+        societies = list(findable.filter(
+            search_name__icontains=query)[:self.LIMIT])
+        words = {w for w in query.split()
                  if len(w) >= self.MIN_WORD and w not in self.GENERIC_WORDS}
         if words and len(societies) < self.LIMIT:
             any_word = Q()
             for word in words:
-                any_word |= Q(name__icontains=word)
+                any_word |= Q(search_name__icontains=word)
             societies += findable.filter(any_word).exclude(
                 pk__in=[s.pk for s in societies])[:self.LIMIT - len(societies)]
         return Response(PublicSocietySerializer(societies, many=True).data)

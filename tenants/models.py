@@ -6,10 +6,19 @@ from day one.
 """
 from __future__ import annotations
 
+import unicodedata
+
 from django.conf import settings
 from django.db import models
 
 from core.models import TenantScopedModel, TimeStampedModel
+
+
+def fold(text: str) -> str:
+    """Lowercase, without accents or tone marks: "Ìmọ̀lè" -> "imole"."""
+    decomposed = unicodedata.normalize("NFKD", text or "")
+    return "".join(c for c in decomposed
+                   if not unicodedata.combining(c)).casefold()
 
 
 class Cooperative(TimeStampedModel):
@@ -29,6 +38,11 @@ class Cooperative(TimeStampedModel):
         LARGE = "large", "Large"
 
     name = models.CharField(max_length=200)
+    # The name without accents or tone marks, lowercased, for the member
+    # signup search: "Imole" must find "Ìmọ̀lè", and whether the database's
+    # collation does that differs between MySQL and SQLite.
+    search_name = models.CharField(max_length=200, blank=True, editable=False,
+                                   db_index=True)
     slug = models.SlugField(max_length=80, unique=True)
     registration_no = models.CharField(max_length=100, blank=True)
     coop_type = models.CharField(
@@ -124,6 +138,10 @@ class Cooperative(TimeStampedModel):
         # unless another society has already chosen that as its code.
         if not self.join_code and self.slug:
             self.join_code = self._free_join_code(self.slug[:50])
+        self.search_name = fold(self.name)
+        update_fields = kwargs.get("update_fields")
+        if update_fields is not None and "name" in update_fields:
+            kwargs["update_fields"] = {*update_fields, "search_name"}
         super().save(*args, **kwargs)
 
     def _free_join_code(self, base: str) -> str:
