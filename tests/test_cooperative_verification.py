@@ -90,19 +90,44 @@ def test_a_new_society_is_told_everything_it_still_needs(coop):
 
     assert not checklist["ready"]
     assert "Appoint a Chairperson." in checklist["missing"]
-    assert "Appoint a Treasurer." in checklist["missing"]
+    assert "Appoint a Treasurer." not in checklist["missing"]
     assert any("certificate of registration" in m
                for m in checklist["missing"])
 
 
-def test_an_officer_without_an_id_is_named(coop, certificate):
+def test_a_chairperson_without_an_id_is_named(coop, certificate):
     _unverify(coop)
-    _officer(coop, "chairperson", 1)
-    _officer(coop, "secretary", 2)
-    _officer(coop, "treasurer", 3, with_id=False)
+    _officer(coop, "chairperson", 1, with_id=False)
 
     assert kyc.checklist(coop)["missing"] == [
-        "The Treasurer must upload a means of ID."]
+        "The Chairperson must upload a means of ID."]
+
+
+def test_a_one_person_society_can_submit(coop, certificate):
+    """Only the Chairperson is required; Secretary and Treasurer may be vacant."""
+    _unverify(coop)
+    chair = _officer(coop, "chairperson", 1)
+
+    checklist = kyc.checklist(coop)
+    assert checklist["ready"], checklist["missing"]
+    offices = {o["role_slug"]: o for o in checklist["officers"]}
+    assert offices["chairperson"]["required"]
+    assert not offices["treasurer"]["required"]
+    assert offices["treasurer"]["holders"] == []
+
+    kyc.submit(coop, actor=chair.user)
+    assert kyc.verification_for(coop).status == Status.SUBMITTED
+
+
+def test_optional_officers_without_ids_do_not_block(coop, certificate):
+    _unverify(coop)
+    _officer(coop, "chairperson", 1)
+    _officer(coop, "treasurer", 3, with_id=False)
+
+    checklist = kyc.checklist(coop)
+    assert checklist["ready"], checklist["missing"]
+    offices = {o["role_slug"]: o for o in checklist["officers"]}
+    assert offices["treasurer"]["holders"][0]["has_id"] is False
 
 
 def test_a_full_exco_with_the_certificate_is_ready(coop, exco, certificate):

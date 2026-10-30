@@ -10,9 +10,11 @@ not settle without knowing who it is paying.
 
 What a society must submit:
 
-* each exco office — Chairperson, Secretary, Treasurer — filled by an active
-  member who has uploaded a means of ID. A membership holds one role, so the
-  three are necessarily three different people;
+* a Chairperson: an active member holding the office who has uploaded a
+  means of ID. Some societies are run by one person, so the Secretary and
+  Treasurer are optional. When they are appointed they are listed for the
+  reviewer, with their ID if they have uploaded one, but a vacancy or a
+  missing ID never holds a submission back;
 * the society's certificate of registration.
 
 The checklist is computed on every read, never stored, so it cannot drift from
@@ -29,8 +31,10 @@ from tenants.models import CooperativeDocument, CooperativeVerification
 
 Status = CooperativeVerification.Status
 
-# The offices whose holders must identify themselves, in display order.
+# The exco offices shown on the checklist, in display order.
 EXCO_ROLES = ("chairperson", "secretary", "treasurer")
+# The ones a society must fill, with an ID, before it can submit.
+REQUIRED_ROLES = ("chairperson",)
 
 REQUIRED_DOCUMENTS = (CooperativeDocument.DocType.REGISTRATION_CERTIFICATE,)
 OPTIONAL_DOCUMENTS = (CooperativeDocument.DocType.BYE_LAWS,
@@ -65,7 +69,7 @@ def require_verified(cooperative, what: str = "Online payments") -> None:
     raise VerificationRequired(
         f"{what} open once {cooperative.name} has been verified. An officer "
         f"can finish verification from the console dashboard — it takes the "
-        f"exco's IDs and the certificate of registration.")
+        f"Chairperson's ID and the certificate of registration.")
 
 
 # ── The checklist ───────────────────────────────────────────────────────────
@@ -102,8 +106,12 @@ def checklist(cooperative) -> dict:
             "has_id": m.id in with_id,
         } for m in holders if m.role.slug == slug]
         done = any(p["has_id"] for p in people)
+        required = slug in REQUIRED_ROLES
         officers.append({"role_slug": slug, "role_name": name,
-                         "holders": people, "done": done})
+                         "required": required, "holders": people,
+                         "done": done})
+        if not required:
+            continue
         if not people:
             missing.append(f"Appoint a {name}.")
         elif not done:
@@ -222,7 +230,7 @@ def _notify_submitted(verification):
         to=platform_support_email(),
         subject=f"Verification to review: {coop.name}",
         heading="A cooperative has submitted its KYC",
-        intro="Its exco IDs and registration certificate are ready to review.",
+        intro="Its officers' IDs and registration certificate are ready to review.",
         rows=[("Cooperative", coop.name),
               ("Submitted by", str(verification.submitted_by or "—"))],
         cta_url=_absolute("/platform/verification"),
