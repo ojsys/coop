@@ -285,8 +285,9 @@ class WalletViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         configured). Nothing is credited until the charge is confirmed.
         """
         cooperative = get_current_cooperative()
-        email = (request.data.get("email")
-                 or getattr(request.user, "email", "") or "")
+        from accounts.identity import payer_email
+
+        email = request.data.get("email") or payer_email(request.user)
         try:
             topup, url = initiate_wallet_topup(
                 cooperative,

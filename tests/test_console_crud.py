@@ -58,7 +58,7 @@ def test_member_edit_updates_user_and_membership(coop):
     m.refresh_from_db()
     m.user.refresh_from_db()
     assert m.user.full_name == "Ada Okonkwo"
-    assert m.user.phone == "08099998888"
+    assert m.user.phone == "+2348099998888"  # stored in E.164
     assert m.share_capital == Decimal("5000")
 
 

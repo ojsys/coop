@@ -169,7 +169,7 @@ def test_completion_erases_personal_data_and_keeps_the_accounts(
     # Deleted.
     assert user.full_name == "Deleted member"
     assert user.email.endswith("@deleted.invalid")
-    assert user.phone == ""
+    assert user.phone is None
     assert not user.is_active and not user.has_usable_password()
     assert member.address == "" and member.bank_account_no == ""
     assert not MemberDocument.all_objects.filter(membership=member).exists()

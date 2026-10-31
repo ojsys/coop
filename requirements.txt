@@ -2,6 +2,8 @@ Django==5.2.15
 django-cors-headers==4.9.0
 djangorestframework==3.17.1
 requests==2.34.2
+# Reads and stores member phone numbers in one form (E.164); phones sign in.
+phonenumbers==9.0.38
 python-dotenv==1.0.1
 Pillow==12.3.0
 reportlab==5.0.0

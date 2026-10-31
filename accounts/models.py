@@ -19,15 +19,15 @@ class UserManager(BaseUserManager):
     use_in_migrations = True
 
     def _create(self, email, password, **extra):
-        if not email:
-            raise ValueError("Users must have an email address")
-        email = self.normalize_email(email)
+        email = self.normalize_email(email) if email else None
+        if not email and not extra.get("phone"):
+            raise ValueError("Users must have an email address or a phone number")
         user = self.model(email=email, **extra)
         user.set_password(password)
         user.save(using=self._db)
         return user
 
-    def create_user(self, email, password=None, **extra):
+    def create_user(self, email=None, password=None, **extra):
         extra.setdefault("is_staff", False)
         extra.setdefault("is_superuser", False)
         return self._create(email, password, **extra)
@@ -42,8 +42,12 @@ class UserManager(BaseUserManager):
 class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     """Global identity. Cooperative-specific data lives on ``Membership``."""
 
-    email = models.EmailField(unique=True)
-    phone = models.CharField(max_length=20, blank=True, db_index=True)
+    # Either signs in, and at least one is required (accounts.identity). Many
+    # members have a phone and no email. Blank is stored as NULL so that the
+    # unique constraints only compare people who actually gave one.
+    email = models.EmailField(unique=True, null=True, blank=True)
+    phone = models.CharField(max_length=20, unique=True, null=True, blank=True,
+                             help_text="E.164, e.g. +2348034412290.")
     full_name = models.CharField(max_length=200)
     national_id = models.CharField(
         max_length=30, blank=True,
@@ -68,7 +72,22 @@ class User(AbstractBaseUser, PermissionsMixin, TimeStampedModel):
     REQUIRED_FIELDS = ["full_name"]
 
     def __str__(self) -> str:
-        return f"{self.full_name} <{self.email}>"
+        return f"{self.full_name} <{self.email or self.phone}>"
+
+    def save(self, *args, **kwargs):
+        from accounts.identity import try_normalize_phone
+
+        self.email = (self.email or "").strip() or None
+        # Already E.164 when it came through a form; this catches the shell
+        # and the admin. An unparseable value is kept as typed rather than
+        # thrown away.
+        self.phone = try_normalize_phone(self.phone) or (self.phone or "").strip() or None
+        super().save(*args, **kwargs)
+
+    @property
+    def sign_in_id(self) -> str:
+        """What this person types at sign-in: their email, else their phone."""
+        return self.email or self.phone or ""
 
 
 class Role(TenantScopedModel, TimeStampedModel):
@@ -432,3 +451,4 @@ class MemberDocument(TenantScopedModel, TimeStampedModel):
 # without this line the model exists but no migration is ever generated for it.
 from accounts.join_models import JoinRequest  # noqa: E402,F401
 from accounts.data_rights_models import AccountDeletionRequest  # noqa: E402,F401,I001
+from accounts.access_codes import AccessCode  # noqa: E402,F401,I001

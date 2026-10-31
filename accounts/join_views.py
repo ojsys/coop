@@ -17,6 +17,9 @@ from rest_framework.response import Response
 from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 
+from accounts.identity import (
+    IdentityError, find_user, identity_q, normalize_email, try_normalize_phone,
+)
 from accounts.join_models import JoinRequest
 from accounts.models import User
 from accounts.join_services import (
@@ -61,8 +64,14 @@ class CooperativeSignupSerializer(serializers.Serializer):
         from django.contrib.auth.password_validation import validate_password
         from django.core.exceptions import ValidationError as DjangoError
 
-        if not User.objects.filter(
-                email__iexact=attrs["applicant_email"]).exists():
+        try:
+            existing = find_user(
+                email=normalize_email(attrs["applicant_email"]),
+                phone=try_normalize_phone(attrs["applicant_phone"],
+                                          attrs["country"] or None))
+        except IdentityError as exc:
+            raise serializers.ValidationError({"detail": [str(exc)]}) from exc
+        if existing is None:
             candidate = User(email=attrs["applicant_email"],
                              full_name=attrs["applicant_name"])
             try:
@@ -192,13 +201,40 @@ class JoinLinkView(PublicView):
 
 
 class JoinRequestCreateSerializer(serializers.Serializer):
+    """A phone number, an email address, or both (request_to_join checks)."""
+
     cooperative = serializers.IntegerField()
     full_name = serializers.CharField(max_length=200)
-    email = serializers.EmailField()
+    email = serializers.EmailField(required=False, allow_blank=True,
+                                   default="")
     phone = serializers.CharField(max_length=20, required=False,
                                   allow_blank=True, default="")
     message = serializers.CharField(max_length=500, required=False,
                                     allow_blank=True, default="")
+    # Optional so app builds that predate it keep working; without it the
+    # applicant sets a password from the welcome email or an access code.
+    password = serializers.CharField(write_only=True, max_length=128,
+                                     required=False, allow_blank=True,
+                                     trim_whitespace=False)
+
+    def validate(self, attrs):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoError
+
+        if not attrs["email"].strip() and not attrs["phone"].strip():
+            raise serializers.ValidationError(
+                {"phone": ["Give a phone number or an email address."]})
+        if attrs.get("password"):
+            try:
+                validate_password(attrs["password"],
+                                  User(full_name=attrs["full_name"],
+                                       email=attrs["email"] or None))
+            except DjangoError as exc:
+                raise serializers.ValidationError(
+                    {"password": list(exc.messages)}) from exc
+        else:
+            attrs.pop("password", None)
+        return attrs
 
 
 class JoinRequestCreateView(PublicView):
@@ -221,14 +257,21 @@ class JoinRequestCreateView(PublicView):
                                  "requests."]})
 
         try:
-            request_to_join(cooperative=cooperative, **data)
+            join_request = request_to_join(cooperative=cooperative, **data)
         except SignupError as exc:
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 
+        if join_request.password_hash:
+            then = ("once they admit you, sign in with your "
+                    f"{'phone number' if join_request.phone else 'email'} "
+                    "and the password you chose.")
+        elif join_request.email:
+            then = "you'll hear from us by email."
+        else:
+            then = "they'll tell you when you can sign in."
         return Response(
             {"detail": "Your request has been sent. An officer of the "
-                       "cooperative will review it and you'll hear from us "
-                       "by email."},
+                       f"cooperative will review it and {then}"},
             status=status.HTTP_201_CREATED,
         )
 
@@ -251,8 +294,9 @@ class JoinRequestSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_has_account(self, obj) -> bool:
-        return User.objects.filter(email__iexact=obj.email,
-                                   is_active=True).exists()
+        return User.objects.filter(
+            identity_q(email=obj.email, phone=obj.phone),
+            is_active=True).exists()
 
 
 class JoinRequestViewSet(TenantScopedViewMixin,
@@ -274,19 +318,35 @@ class JoinRequestViewSet(TenantScopedViewMixin,
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
         # The member number is assigned automatically; any sent is ignored.
+        join_request = self.get_object()
+        # Their chosen password is used only if approving creates the account.
+        chose_password = bool(join_request.password_hash) and not (
+            User.objects.filter(identity_q(email=join_request.email,
+                                           phone=join_request.phone)).exists())
         try:
-            membership = approve_join_request(
-                self.get_object(), actor=request.user)
+            membership = approve_join_request(join_request, actor=request.user)
         except SignupError as exc:
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 
-        told = ("They've been emailed to say they can switch to this "
-                "society from their account."
-                if membership.user.has_usable_password() else
-                "They've been emailed a link to set their password.")
+        user = membership.user
+        if chose_password:
+            told = "They can sign in with the password they chose."
+        elif user.has_usable_password():
+            told = ("They can switch to this society from their account."
+                    if not user.email else
+                    "They've been emailed to say they can switch to this "
+                    "society from their account.")
+        elif user.email:
+            told = "They've been emailed a link to set their password."
+        else:
+            told = ("They have no email, so give them an access code from "
+                    "their member record to set their password.")
         return Response({
             "detail": f"{membership.user.full_name} has been admitted. {told}",
             "membership": membership.id,
+            # No email and no password: the console offers an access code.
+            "needs_access_code": not (user.email
+                                      or user.has_usable_password()),
         })
 
     @action(detail=True, methods=["post"])
@@ -347,6 +407,11 @@ class MyJoinRequestCreateSerializer(serializers.Serializer):
         return attrs
 
 
+def _requests_of(user):
+    """Join requests filed with this person's email or phone."""
+    return identity_q(email=user.email, phone=user.phone)
+
+
 class MyJoinRequestsView(APIView):
     """`/me/join-requests/` — ask another society to admit you, with the
     account you already have.
@@ -368,7 +433,7 @@ class MyJoinRequestsView(APIView):
 
     def _mine(self, request):
         return (JoinRequest.all_objects
-                .filter(email__iexact=request.user.email)
+                .filter(_requests_of(request.user))
                 .exclude(status=JoinRequest.Status.APPROVED)
                 .select_related("cooperative").order_by("-created_at"))
 
@@ -385,7 +450,7 @@ class MyJoinRequestsView(APIView):
         try:
             join_request = request_to_join(
                 cooperative=data["society"], full_name=user.full_name,
-                email=user.email, phone=user.phone or "",
+                email=user.email or "", phone=user.phone or "",
                 message=data["message"])
         except SignupError as exc:
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
@@ -401,7 +466,7 @@ class MyJoinRequestDetailView(APIView):
 
     def delete(self, request, pk):
         join_request = JoinRequest.all_objects.filter(
-            pk=pk, email__iexact=request.user.email,
+            _requests_of(request.user), pk=pk,
             status=JoinRequest.Status.PENDING).first()
         if join_request is None:
             raise Http404

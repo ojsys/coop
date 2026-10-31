@@ -27,8 +27,8 @@ from django.db.models.functions import Coalesce
 from django.utils.html import format_html
 
 from accounts.models import (
-    AccountDeletionRequest, JoinRequest, MemberDocument, Membership, Role,
-    User,
+    AccessCode, AccountDeletionRequest, JoinRequest, MemberDocument,
+    Membership, Role, User,
 )
 from core.admin import (TenantScopedModelAdmin, TenantScopedTabularInline,
                         TwoFactorRequiredMixin)
@@ -54,18 +54,18 @@ class UserAdmin(BaseUserAdmin):
     form = UserChangeForm
     add_form = UserCreationForm
 
-    list_display = ("email", "full_name", "phone", "is_active", "is_staff",
+    list_display = ("full_name", "email", "phone", "is_active", "is_staff",
                     "is_platform_admin", "two_factor_enabled")
     list_filter = ("is_active", "is_staff", "is_superuser", "is_platform_admin",
                    "two_factor_enabled", "groups")
     search_fields = ("email", "full_name", "phone")
-    ordering = ("email",)
+    ordering = ("full_name",)
     filter_horizontal = ("groups", "user_permissions")
     readonly_fields = ("last_login", "created_at", "updated_at")
 
     fieldsets = (
-        (None, {"fields": ("email", "password")}),
-        ("Personal info", {"fields": ("full_name", "phone")}),
+        (None, {"fields": ("email", "phone", "password")}),
+        ("Personal info", {"fields": ("full_name",)}),
         ("Sensitive (NDPA)", {
             "classes": ("collapse",),
             "description": "Regulated personal data — access is audited.",
@@ -426,11 +426,42 @@ class JoinRequestAdmin(TenantScopedModelAdmin):
     ordering = ("-created_at",)
     list_select_related = ("cooperative", "decided_by", "membership")
 
+    # The chosen password's hash is never shown, even read-only.
+    exclude = ("password_hash",)
+
     def get_readonly_fields(self, request, obj=None):
-        return tuple(f.name for f in self.model._meta.fields) + ("membership",)
+        return tuple(f.name for f in self.model._meta.fields
+                     if f.name != "password_hash") + ("membership",)
 
     def has_add_permission(self, request):
         # Requests arrive from the public join form.
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AccessCode)
+class AccessCodeAdmin(admin.ModelAdmin):
+    """A viewer, for support: was a code issued, by whom, and was it used.
+
+    Codes are issued from the console by the society's officers
+    (accounts.access_codes); the code itself is never stored.
+    """
+
+    list_display = ("user", "cooperative", "issued_by", "created_at",
+                    "expires_at", "used_at", "attempts")
+    list_filter = ("cooperative", "created_at")
+    search_fields = ("user__full_name", "user__email", "user__phone")
+    ordering = ("-created_at",)
+    list_select_related = ("user", "cooperative", "issued_by")
+    exclude = ("code_hash",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(f.name for f in self.model._meta.fields
+                     if f.name != "code_hash")
+
+    def has_add_permission(self, request):
         return False
 
     def has_change_permission(self, request, obj=None):

@@ -5,7 +5,7 @@ A person who is not yet a member has no account, so a join request deliberately
 stores their details rather than creating a ``User`` up front — an unapproved
 stranger must not hold credentials for a society they do not belong to. The
 ``User`` and ``Membership`` are created only when an officer approves, at which
-point the member is emailed a set-password link.
+point the member is emailed a set-password link if they gave an email.
 
 Kept in its own module rather than ``accounts/models.py`` to keep the identity
 and RBAC models together and uncluttered; it is imported from there so Django
@@ -28,8 +28,15 @@ class JoinRequest(TenantScopedModel, TimeStampedModel):
         REJECTED = "rejected", "Rejected"
 
     full_name = models.CharField(max_length=200)
-    email = models.EmailField()
+    # At least one of the two, as for an account (accounts.identity). Phone is
+    # stored in E.164 so it matches the account it becomes.
+    email = models.EmailField(blank=True)
     phone = models.CharField(max_length=20, blank=True)
+    # The password the applicant chose, hashed, so that someone with no email
+    # can sign in as soon as they are admitted. Becomes the account's
+    # password on approval, only if approval creates the account, and is
+    # cleared once the request is decided.
+    password_hash = models.CharField(max_length=128, blank=True)
     # Anything the applicant wants the officers to know — an existing member
     # number from the paper register, who introduced them, and so on.
     message = models.CharField(max_length=500, blank=True)

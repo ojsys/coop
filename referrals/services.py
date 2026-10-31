@@ -74,17 +74,25 @@ def sign_up_referrer(*, full_name, email, password, phone="") -> Referrer:
     password, for the same reason as society signup: a public form must not
     let a stranger attach things to someone else's account.
     """
-    from accounts.models import User
+    from accounts.identity import (
+        IdentityError, find_or_create_user, find_user, normalize_email,
+        normalize_phone,
+    )
 
-    user = User.objects.filter(email__iexact=email).first()
-    if user is not None:
-        if not user.check_password(password):
-            raise ReferralError(
-                "That email already has an account. Use its password — or "
-                "reset it from the sign-in page — and try again.")
-    else:
-        user = User.objects.create_user(email=email, full_name=full_name,
-                                        phone=phone, password=password)
+    try:
+        email, phone = normalize_email(email), normalize_phone(phone)
+        user = find_user(email=email, phone=phone)
+        if user is not None:
+            if not user.check_password(password):
+                raise ReferralError(
+                    "That email or phone number already has an account. Use "
+                    "its password — or reset it from the sign-in page — and "
+                    "try again.")
+        else:
+            user, _ = find_or_create_user(full_name=full_name, email=email,
+                                          phone=phone, password=password)
+    except IdentityError as exc:
+        raise ReferralError(str(exc)) from exc
     return become_referrer(user)
 
 

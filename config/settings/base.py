@@ -77,6 +77,8 @@ MIDDLEWARE = [
 
 # Custom user (phone/email login, NDPA-relevant PII fields).
 AUTH_USER_MODEL = 'accounts.User'
+# Sign in with the account's email or its phone number (accounts.identity).
+AUTHENTICATION_BACKENDS = ['accounts.identity.EmailOrPhoneBackend']
 
 # --- Django REST Framework -------------------------------------------------
 REST_FRAMEWORK = {
@@ -96,6 +98,10 @@ REST_FRAMEWORK = {
     # unauthenticated and emails a third party, so it is abusable on two counts.
     'DEFAULT_THROTTLE_RATES': {
         'password_reset': '5/hour',
+        # Using an access code. A secretary may set several members up from
+        # one phone in an afternoon; each code is also burnt after five wrong
+        # tries (accounts.access_codes).
+        'access_code': '20/hour',
         # Changing your own password needs the current one, so this caps how
         # fast a stolen session can guess at it.
         'password_change': '10/hour',
@@ -218,6 +224,12 @@ DEFAULT_FROM_EMAIL = os.environ.get(
 # request, so a relative password-reset link is worthless — this must be set to
 # the public origin in production.
 SITE_URL = os.environ.get('SITE_URL', 'http://localhost:5173')
+
+# Paystack will not open a checkout without an email. Members who have none
+# pay as member-<id>@ this domain, which receives no mail
+# (accounts.identity.payer_email).
+PAYER_EMAIL_DOMAIN = os.environ.get('PAYER_EMAIL_DOMAIN',
+                                    'members.mycooperativeos.com')
 
 ROOT_URLCONF = 'config.urls'
 

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from accounts.identity import (
+    IdentityError, find_or_create_user, find_user, normalize_email,
+    normalize_phone, region_for,
+)
 from accounts.models import MemberDocument, Membership, Role, User
 
 
@@ -143,6 +147,14 @@ class UserSerializer(serializers.ModelSerializer):
     def get_email_verified(self, obj) -> bool:
         return obj.email_verified_at is not None
 
+    def to_representation(self, instance):
+        # "" rather than null for a phone-only account: app builds already
+        # installed read email as a required string.
+        data = super().to_representation(instance)
+        data["email"] = data["email"] or ""
+        data["phone"] = data["phone"] or ""
+        return data
+
     def get_is_referrer(self, obj) -> bool:
         from referrals.models import Referrer
         return Referrer.objects.filter(user=obj).exists()
@@ -186,9 +198,13 @@ class RoleSerializer(serializers.ModelSerializer):
 class MembershipSerializer(serializers.ModelSerializer):
     # Accept nested user details on create; expose read-only summary.
     full_name = serializers.CharField(source="user.full_name")
-    email = serializers.EmailField(source="user.email")
+    # A phone number, an email address, or both: either signs in, so they
+    # are checked together in _clean_identity.
+    email = serializers.EmailField(source="user.email", required=False,
+                                   allow_blank=True, allow_null=True)
     phone = serializers.CharField(source="user.phone", required=False,
-                                  allow_blank=True)
+                                  allow_blank=True, allow_null=True,
+                                  max_length=20)
     role_name = serializers.CharField(source="role.name", read_only=True)
     savings_balance = serializers.DecimalField(
         max_digits=16, decimal_places=2, read_only=True,
@@ -211,6 +227,10 @@ class MembershipSerializer(serializers.ModelSerializer):
                                           read_only=True)
     verified_by_name = serializers.CharField(
         source="verified_by.full_name", read_only=True, default=None)
+    # False until they have chosen a password: the console offers an access
+    # code to someone with no email (accounts.access_codes).
+    has_password = serializers.BooleanField(
+        source="user.has_usable_password", read_only=True)
 
     class Meta:
         model = Membership
@@ -225,7 +245,8 @@ class MembershipSerializer(serializers.ModelSerializer):
                   "is_verified", "verified_via", "verification_status",
                   "verification_note", "verification_missing",
                   "verification_withdrawn", "profile_percent",
-                  "profile_steps", "verified_by_name", "verified_at"]
+                  "profile_steps", "verified_by_name", "verified_at",
+                  "has_password"]
         # Assigned by the platform when someone is added, never typed or
         # changed: see accounts.join_services.next_member_no.
         read_only_fields = ["verified_at", "member_no"]
@@ -253,10 +274,12 @@ class MembershipSerializer(serializers.ModelSerializer):
         """
         from core.media import sign_private_urls
 
-        return sign_private_urls(
-            super().to_representation(instance), "photo",
-            request=self.context.get("request"),
-        )
+        data = super().to_representation(instance)
+        # "" rather than null for a phone-only member (see UserSerializer).
+        data["email"] = data.get("email") or ""
+        data["phone"] = data.get("phone") or ""
+        return sign_private_urls(data, "photo",
+                                 request=self.context.get("request"))
 
     def create(self, validated_data):
         from django.db import transaction
@@ -265,13 +288,9 @@ class MembershipSerializer(serializers.ModelSerializer):
         from core.context import get_current_cooperative
 
         user_data = validated_data.pop("user")
-        user, _ = User.objects.get_or_create(
-            email=user_data["email"],
-            defaults={
-                "full_name": user_data.get("full_name", ""),
-                "phone": user_data.get("phone", ""),
-            },
-        )
+        user, _ = find_or_create_user(
+            full_name=user_data.get("full_name", ""),
+            email=user_data.get("email"), phone=user_data.get("phone"))
         with transaction.atomic():
             return Membership.objects.create(
                 user=user, member_no=next_member_no(get_current_cooperative()),
@@ -290,6 +309,7 @@ class MembershipSerializer(serializers.ModelSerializer):
         from accounts.join_services import LastOfficerError, check_officer_remains
 
         self._check_non_member(attrs)
+        self._clean_identity(attrs.get("user", {}))
         if self.instance is None:
             return attrs
         if "role" not in attrs and "status" not in attrs:
@@ -308,6 +328,70 @@ class MembershipSerializer(serializers.ModelSerializer):
         except LastOfficerError as exc:
             raise serializers.ValidationError({"role": [str(exc)]}) from exc
         return attrs
+
+    # MemberSelfSerializer: a person may change their own phone and email.
+    edits_own_record = False
+
+    def _clean_identity(self, user_data):
+        """Normalise the phone and email, and refuse ones that cannot be used.
+
+        Both sign in, so on an existing account they are changed with care:
+        the email only ever fills a blank (it was the login before phones
+        were), and an officer may not change either for someone who also
+        belongs to another society, whose account is not theirs to manage.
+        """
+        from core.context import get_current_cooperative
+
+        if "phone" in user_data:
+            try:
+                user_data["phone"] = normalize_phone(
+                    user_data["phone"], region_for(get_current_cooperative()))
+            except IdentityError as exc:
+                raise serializers.ValidationError(
+                    {"phone": [str(exc)]}) from exc
+        if "email" in user_data:
+            user_data["email"] = normalize_email(user_data["email"])
+
+        if self.instance is None:
+            if not user_data.get("email") and not user_data.get("phone"):
+                raise serializers.ValidationError({"phone": [
+                    "Give a phone number or an email address."]})
+            try:
+                find_user(email=user_data.get("email"),
+                          phone=user_data.get("phone"))
+            except IdentityError as exc:
+                raise serializers.ValidationError(
+                    {"phone": [str(exc)]}) from exc
+            return
+
+        user = self.instance.user
+        if "email" in user_data and (user.email or not user_data["email"]):
+            user_data.pop("email")
+        changing = [f for f in ("phone", "email")
+                    if f in user_data and user_data[f] != getattr(user, f)]
+        if not changing:
+            return
+        field = changing[0]
+        if not self.edits_own_record and (
+                user.is_platform_admin or user.is_staff
+                or Membership.all_objects.filter(user=user).exclude(
+                    cooperative_id=self.instance.cooperative_id).exists()):
+            raise serializers.ValidationError({field: [
+                "This person also uses CooperativeOS elsewhere, so only they "
+                "can change the phone number or email they sign in with."]})
+        new_phone = user_data.get("phone", user.phone)
+        new_email = user_data.get("email", user.email)
+        if not new_phone and not new_email:
+            raise serializers.ValidationError({"phone": [
+                "A phone number is needed: this person has no email to sign "
+                "in with."]})
+        value = user_data[field]
+        if value and User.objects.filter(
+                **{f"{field}__iexact" if field == "email" else field: value}
+        ).exclude(pk=user.pk).exists():
+            noun = "phone number" if field == "phone" else "email address"
+            raise serializers.ValidationError({field: [
+                f"That {noun} already belongs to another account."]})
 
     def _check_non_member(self, attrs):
         def current(field, default=None):
@@ -334,14 +418,13 @@ class MembershipSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         # Editable: the person's name/phone (on the shared User) plus the
-        # membership's role, status and share_capital. Email is the
-        # login identity and is intentionally not changed here.
+        # membership's role, status and share_capital. An email is only ever
+        # added where there was none (_clean_identity), never replaced.
         user_data = validated_data.pop("user", {})
         user = instance.user
-        if "full_name" in user_data:
-            user.full_name = user_data["full_name"]
-        if "phone" in user_data:
-            user.phone = user_data["phone"]
+        for field in ("full_name", "phone", "email"):
+            if field in user_data:
+                setattr(user, field, user_data[field])
         if user_data:
             user.save()
 
@@ -373,6 +456,8 @@ class MemberSelfSerializer(MembershipSerializer):
     # destination must not move under it.
     LIVE_LOAN_STATUSES = ("pending", "approved", "disbursed")
     BANK_FIELDS = ("bank_name", "bank_code", "bank_account_no")
+
+    edits_own_record = True
 
     class Meta(MembershipSerializer.Meta):
         read_only_fields = ["member_no", "role", "kind", "status",

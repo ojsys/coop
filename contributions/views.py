@@ -124,13 +124,14 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         from django.conf import settings as dj_settings
         from payments.providers import (PAYER_PAYMENT_UNAVAILABLE,
                                         PaymentInitError)
+        from accounts.identity import payer_email
         from payments.services import initialize_payment
 
         authorization_url = None
         payment_error = None
         try:
             authorization_url = initialize_payment(
-                contribution, email=membership.user.email,
+                contribution, email=payer_email(membership.user),
                 callback_url=request.data.get("callback_url"),
             )
         except PaymentInitError as exc:
@@ -148,7 +149,7 @@ class ContributionViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         # For Paystack Inline (the on-page checkout modal), which the web client
         # opens with the public key.
         payload["paystack_public_key"] = dj_settings.PAYSTACK_PUBLIC_KEY or None
-        payload["payer_email"] = membership.user.email
+        payload["payer_email"] = payer_email(membership.user)
         # The member pays Paystack's fee on top, so the inline checkout must
         # charge the same grossed-up total the server-side checkout uses.
         from payments.fees import gross_up

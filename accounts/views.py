@@ -8,7 +8,7 @@ from rest_framework.response import Response
 
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
-from accounts.models import MemberDocument, Membership, Role, User
+from accounts.models import MemberDocument, Membership, Role
 from accounts.serializers import (
     MemberDocumentSerializer, MembershipSerializer, RoleSerializer,
     UserSerializer,
@@ -168,6 +168,29 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
         send_welcome_email(membership)
 
+    @action(detail=True, methods=["post"], url_path="access-code")
+    def access_code(self, request, pk=None):
+        """Issue a one-time code the member uses to choose a password.
+
+        For members with no email (accounts.access_codes). The code is in this
+        response only: the officer reads it out or writes it down for them.
+        """
+        from accounts.access_codes import AccessCodeError, issue_access_code
+
+        membership = self.get_object()
+        try:
+            row, code = issue_access_code(membership, actor=request.user)
+        except AccessCodeError as exc:
+            return Response({"detail": str(exc)}, status=400)
+        user = membership.user
+        return Response({
+            "code": code,
+            "expires_at": row.expires_at,
+            "sign_in_with": user.phone or user.email,
+            "detail": f"Give this code to {user.full_name}. It works once, "
+                      "for 72 hours.",
+        })
+
     @action(detail=True, methods=["get"])
     def statement(self, request, pk=None):
         """The member's dated ledger statement with running balance.
@@ -187,12 +210,16 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     def bulk_import(self, request):
         """Create members in bulk from an uploaded CSV.
 
-        Columns: full_name, email, phone, share_capital, role_slug, and an
-        optional member_no. Numbers are assigned automatically; member_no is
+        Columns: full_name, phone, email, share_capital, role_slug, and an
+        optional member_no. Each row needs a phone or an email (or both). Numbers are assigned automatically; member_no is
         only for a society bringing its existing register across, so members
         keep the numbers already on their passbooks.
         Returns per-row results so the admin can fix and re-upload failures.
         """
+        from accounts.identity import (
+            IdentityError, find_or_create_user, normalize_email,
+            normalize_phone, region_for,
+        )
         from accounts.join_services import next_member_no
         import csv
         import io
@@ -212,10 +239,15 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         for i, row in enumerate(reader, start=2):  # row 1 is the header
             member_no = (row.get("member_no") or "").strip()
             full_name = (row.get("full_name") or "").strip()
-            email = (row.get("email") or "").strip().lower()
-            if not full_name or not email:
-                errors.append({"row": i,
-                               "error": "full_name and email are required"})
+            email = normalize_email(row.get("email"))
+            try:
+                phone = normalize_phone(row.get("phone"), region_for(coop))
+            except IdentityError as exc:
+                errors.append({"row": i, "error": str(exc)})
+                continue
+            if not full_name or not (email or phone):
+                errors.append({"row": i, "error": "full_name and a phone or "
+                                                  "email are required"})
                 continue
             if member_no and Membership.objects.filter(
                     member_no=member_no).exists():
@@ -223,14 +255,12 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
                                "error": f"member_no {member_no} already exists"})
                 continue
             try:
-                user, _ = User.objects.get_or_create(
-                    email=email,
-                    defaults={"full_name": full_name,
-                              "phone": (row.get("phone") or "").strip()})
+                user, _ = find_or_create_user(full_name=full_name,
+                                              email=email, phone=phone)
                 if Membership.all_objects.filter(cooperative=coop,
                                                  user=user).exists():
-                    errors.append({"row": i,
-                                   "error": f"{email} is already a member"})
+                    errors.append({"row": i, "error": f"{email or phone} is "
+                                                      "already a member"})
                     continue
                 Membership.objects.create(
                     user=user, member_no=member_no or next_member_no(coop),

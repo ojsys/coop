@@ -26,7 +26,9 @@ from communications.email import send_password_reset_email
 # Deliberately identical whether or not the address is registered: a differing
 # response lets anyone test which members belong to a society.
 GENERIC_RESPONSE = {
-    "detail": "If that address has an account, a reset link is on its way.",
+    "detail": "If that account has an email address, a reset link is on its "
+              "way. If you signed up with only a phone number, ask your "
+              "society's secretary for an access code.",
 }
 
 
@@ -54,7 +56,17 @@ class LoginView(ObtainAuthToken):
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    # The phone or email the person signs in with. ``email`` is what clients
+    # sent before phones could sign in.
+    username = serializers.CharField(max_length=254, required=False)
+    email = serializers.CharField(max_length=254, required=False)
+
+    def validate(self, attrs):
+        identifier = (attrs.get("username") or attrs.get("email") or "").strip()
+        if not identifier:
+            raise serializers.ValidationError(
+                {"username": ["Enter your phone number or email address."]})
+        return {"identifier": identifier}
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
@@ -75,10 +87,10 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = User.objects.filter(
-            email__iexact=serializer.validated_data["email"], is_active=True,
-        ).first()
-        if user is not None:
+        user = user_for_identifier(serializer.validated_data["identifier"])
+        # Someone with no email gets an access code from their society
+        # instead; the reply is the same so it reveals nothing either way.
+        if user is not None and user.email:
             # Brand the mail with the society when the user belongs to exactly
             # one; otherwise it goes out under the platform's own brand.
             # all_objects, not user.memberships: a reverse manager inherits
@@ -147,6 +159,68 @@ class PasswordResetConfirmView(APIView):
         except (TypeError, ValueError, OverflowError, UnicodeDecodeError):
             return None
         return User.objects.filter(pk=pk, is_active=True).first()
+
+
+def user_for_identifier(identifier: str):
+    """The active account a typed phone or email signs in to, or ``None``."""
+    from accounts.identity import try_normalize_phone
+
+    identifier = (identifier or "").strip()
+    if "@" in identifier:
+        return User.objects.filter(email__iexact=identifier,
+                                   is_active=True).first()
+    phone = try_normalize_phone(identifier)
+    return (User.objects.filter(phone=phone, is_active=True).first()
+            if phone else None)
+
+
+class AccessCodeRedeemSerializer(serializers.Serializer):
+    username = serializers.CharField(max_length=254)
+    code = serializers.CharField(max_length=32)
+    password = serializers.CharField(write_only=True, max_length=128,
+                                     trim_whitespace=False)
+
+
+class AccessCodeRedeemView(APIView):
+    """`POST /auth/access-code/` — choose a password with an access code.
+
+    For a member with no email: an officer of their society issued the code
+    (accounts.access_codes). A wrong phone and a wrong code get the same
+    answer, so the form cannot be used to find out who is registered.
+    """
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "access_code"
+
+    def post(self, request):
+        from accounts.access_codes import AccessCodeError, redeem_access_code
+
+        serializer = AccessCodeRedeemSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        user = user_for_identifier(data["username"])
+        try:
+            validate_password(data["password"], user)
+        except DjangoValidationError as exc:
+            return Response({"password": list(exc.messages)},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            if user is None:
+                raise AccessCodeError
+            redeem_access_code(user=user, code=data["code"],
+                               password=data["password"])
+        except AccessCodeError:
+            return Response(
+                {"detail": "That code is not right, or it has expired. Check "
+                           "the phone number, or ask your society's "
+                           "secretary for a new code."},
+                status=status.HTTP_400_BAD_REQUEST)
+        return Response({"detail": "Your password is set. You can now sign "
+                                   "in.",
+                         "username": user.phone or user.email})
 
 
 class PasswordChangeSerializer(serializers.Serializer):

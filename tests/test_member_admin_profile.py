@@ -137,7 +137,7 @@ def test_changing_the_phone_updates_the_user_record(member):
     _bound(member, phone="08030000001")
 
     member.user.refresh_from_db()
-    assert member.user.phone == "08030000001"
+    assert member.user.phone == "+2348030000001"  # stored in E.164
 
 
 def test_an_unchanged_person_is_not_written_to(member):

@@ -167,6 +167,7 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         from loans.services import LoanError, initiate_loan_repayment
         from payments.providers import (PAYER_PAYMENT_UNAVAILABLE,
                                         PaymentInitError)
+        from accounts.identity import payer_email
         from payments.services import initialize_loan_payment
         from tenants.verification import require_verified
 
@@ -185,7 +186,7 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
         payment_error = None
         try:
             authorization_url = initialize_loan_payment(
-                repayment, email=loan.membership.user.email,
+                repayment, email=payer_email(loan.membership.user),
                 callback_url=request.data.get("callback_url"))
         except PaymentInitError as exc:
             logging.getLogger("payments").warning(
@@ -210,7 +211,7 @@ class MemberLoanViewSet(TenantScopedViewMixin, mixins.ListModelMixin,
             "authorization_url": authorization_url,
             "payment_error": payment_error,
             "paystack_public_key": dj_settings.PAYSTACK_PUBLIC_KEY or None,
-            "payer_email": loan.membership.user.email,
+            "payer_email": payer_email(loan.membership.user),
             "amount_kobo": int(total * 100),
             "payment_simulated": (
                 dj_settings.PAYSTACK_SECRET_KEY.startswith("sk_test_dev")

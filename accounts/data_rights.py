@@ -276,7 +276,7 @@ def complete_deletion(req: AccountDeletionRequest, *, actor) -> None:
             f"{b['cooperative']}: {b['message']}" if b["cooperative"]
             else b["message"] for b in blockers))
 
-    old_email = user.email
+    old_email, old_phone = user.email, user.phone
     today = timezone.localdate()
     for m in memberships_of(user):
         if m.photo:
@@ -303,7 +303,10 @@ def complete_deletion(req: AccountDeletionRequest, *, actor) -> None:
                       after={"member_no": m.member_no,
                              "deletion_request": req.pk})
 
-    JoinRequest.all_objects.filter(email__iexact=old_email).update(
+    from accounts.identity import identity_q
+
+    JoinRequest.all_objects.filter(
+        identity_q(email=old_email, phone=old_phone)).update(
         full_name=DELETED_NAME, email="", phone="", message="")
     Token.objects.filter(user=user).delete()
 

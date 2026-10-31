@@ -10,8 +10,8 @@ from accounts.member_views import (
     MemberSavingsProductViewSet, MemberWithdrawalViewSet,
 )
 from accounts.auth_views import (
-    EmailVerifyResendView, EmailVerifyView, LoginView, PasswordChangeView,
-    PasswordResetConfirmView, PasswordResetRequestView,
+    AccessCodeRedeemView, EmailVerifyResendView, EmailVerifyView, LoginView,
+    PasswordChangeView, PasswordResetConfirmView, PasswordResetRequestView,
 )
 from accounts.data_rights_views import (
     DeletionRequestViewSet, MyDataExportView, MyDeletionRequestView,
@@ -176,6 +176,8 @@ urlpatterns = [
     path("auth/token/", LoginView.as_view(), name="api-token"),
     path("auth/verify-email/", EmailVerifyView.as_view(),
          name="verify-email"),
+    path("auth/access-code/", AccessCodeRedeemView.as_view(),
+         name="auth-access-code"),
     path("auth/password-reset/", PasswordResetRequestView.as_view(),
          name="password-reset"),
     path("auth/password-reset/confirm/", PasswordResetConfirmView.as_view(),

@@ -11,12 +11,17 @@ from __future__ import annotations
 
 import logging
 
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.utils import timezone
 from django.utils.text import slugify
 
+from accounts.identity import (
+    IdentityError, find_or_create_user, find_user, identity_q, normalize_email,
+    normalize_phone, region_for,
+)
 from accounts.join_models import JoinRequest
-from accounts.models import Membership, Role, User
+from accounts.models import Membership, Role
 from core.reference_data import country_name
 
 logger = logging.getLogger("api.errors")
@@ -218,13 +223,13 @@ def create_founding_admin(cooperative, *, full_name, email, phone="",
 
     Idempotent — re-running for the same person returns their membership.
     """
-    user = User.objects.filter(email__iexact=email).first()
-    if user is None:
-        user = User.objects.create_user(
-            email=email, full_name=full_name, phone=phone, password=password)
-        if password is None:
-            user.set_unusable_password()
-            user.save(update_fields=["password"])
+    try:
+        user, _ = find_or_create_user(
+            full_name=full_name, email=normalize_email(email),
+            phone=normalize_phone(phone, region_for(cooperative)),
+            password=password)
+    except IdentityError as exc:
+        raise SignupError(str(exc)) from exc
 
     existing = Membership.all_objects.filter(
         cooperative=cooperative, user=user).first()
@@ -271,11 +276,24 @@ def sign_up_cooperative(*, society_name, applicant_name, applicant_email,
     from tenants.models import Cooperative
     from tenants.services import provision_cooperative
 
-    existing = User.objects.filter(email__iexact=applicant_email).first()
+    applicant_email = normalize_email(applicant_email)
+    try:
+        applicant_phone = normalize_phone(applicant_phone, country) or ""
+        existing = find_user(email=applicant_email, phone=applicant_phone)
+    except IdentityError as exc:
+        raise SignupError(str(exc)) from exc
     if existing is not None and not existing.check_password(password):
+        which = ("email" if existing.email
+                 and existing.email.lower() == applicant_email else
+                 "phone number")
         raise SignupError(
-            "That email already has a CooperativeOS account. Use its password "
-            "— or reset it from the sign-in page — and try again.")
+            f"That {which} already has a CooperativeOS account. Use its "
+            "password — or reset it from the sign-in page — and try again.")
+    if existing is not None and not existing.email:
+        # Found by phone and proved by password: the same person, who now
+        # gives an email for the society's invoices and KYC.
+        existing.email = applicant_email
+        existing.save(update_fields=["email", "updated_at"])
 
     cooperative = provision_cooperative(
         name=society_name,
@@ -320,7 +338,7 @@ def _notify_signup(*, membership, estimated_members, message):
 
     rows = [
         ("Cooperative", cooperative.name),
-        ("Founder", f"{user.full_name} <{user.email}>"),
+        ("Founder", f"{user.full_name} <{user.sign_in_id}>"),
         ("Phone", cooperative.contact_phone or "—"),
         ("Location", " · ".join(filter(None, (
             cooperative.lga, cooperative.state,
@@ -341,23 +359,36 @@ def _notify_signup(*, membership, estimated_members, message):
 
 # ── A person applying to join a society ─────────────────────────────────────
 @transaction.atomic
-def request_to_join(*, cooperative, full_name, email, phone="", message=""):
-    """Record a membership request for officers of that society to decide."""
-    email = email.strip().lower()
+def request_to_join(*, cooperative, full_name, email="", phone="",
+                    message="", password=None):
+    """Record a membership request for officers of that society to decide.
+
+    A phone number, an email address, or both: most members of a farmers' or
+    traders' society have no email. ``password``, if given, is kept hashed
+    and becomes their password when they are admitted.
+    """
+    email = normalize_email(email)
+    try:
+        phone = normalize_phone(phone, region_for(cooperative))
+    except IdentityError as exc:
+        raise SignupError(str(exc)) from exc
+    if not email and not phone:
+        raise SignupError("Give a phone number or an email address.")
 
     already_a_member = Membership.all_objects.filter(
-        cooperative=cooperative, user__email__iexact=email,
+        identity_q(email=email, phone=phone, prefix="user__"),
+        cooperative=cooperative,
     ).exists()
     if already_a_member:
         raise SignupError(
-            "That email address already belongs to a member of this "
-            "cooperative. Try signing in, or use 'Forgot password'."
+            "That phone number or email address already belongs to a member "
+            "of this cooperative. Try signing in, or use 'Forgot password'."
         )
 
     # Portable stand-in for the partial unique index MySQL cannot express.
     duplicate = JoinRequest.all_objects.filter(
-        cooperative=cooperative, email__iexact=email,
-        status=JoinRequest.Status.PENDING,
+        identity_q(email=email, phone=phone),
+        cooperative=cooperative, status=JoinRequest.Status.PENDING,
     ).exists()
     if duplicate:
         raise SignupError(
@@ -366,8 +397,9 @@ def request_to_join(*, cooperative, full_name, email, phone="", message=""):
         )
 
     request = JoinRequest.all_objects.create(
-        cooperative=cooperative, full_name=full_name, email=email,
-        phone=phone, message=message,
+        cooperative=cooperative, full_name=full_name, email=email or "",
+        phone=phone or "", message=message,
+        password_hash=make_password(password) if password else "",
     )
 
     transaction.on_commit(lambda: _notify_join_request(request))
@@ -403,8 +435,8 @@ def _notify_join_request(request):
         cooperative=request.cooperative,
         rows=[
             ("Name", request.full_name),
-            ("Email", request.email),
             ("Phone", request.phone or "—"),
+            ("Email", request.email or "—"),
             ("Message", request.message or "—"),
         ],
     )
@@ -417,8 +449,8 @@ def approve_join_request(join_request, *, actor, role=None):
     Their member number is assigned here (:func:`next_member_no`).
 
     The account is created here — not when they applied — so an unapproved
-    stranger never holds credentials for a society. They are emailed a
-    set-password link rather than a generated password.
+    stranger never holds credentials for a society. Someone with an email is
+    sent a set-password link rather than a generated password.
     """
     if join_request.status != JoinRequest.Status.PENDING:
         raise SignupError("This request has already been decided.")
@@ -426,15 +458,18 @@ def approve_join_request(join_request, *, actor, role=None):
     cooperative = join_request.cooperative
     member_no = next_member_no(cooperative)
 
-    user = User.objects.filter(email__iexact=join_request.email).first()
-    if user is None:
-        # No usable password: the welcome email carries a set-password link.
-        user = User.objects.create_user(
-            email=join_request.email, full_name=join_request.full_name,
-            phone=join_request.phone,
-        )
-        user.set_unusable_password()
-        user.save(update_fields=["password"])
+    try:
+        # No usable password unless they chose one when applying: the
+        # welcome email carries a set-password link, or an officer issues an
+        # access code to someone with no email.
+        user, created = find_or_create_user(
+            full_name=join_request.full_name,
+            email=join_request.email or None, phone=join_request.phone or None)
+    except IdentityError as exc:
+        raise SignupError(str(exc)) from exc
+    if created and join_request.password_hash:
+        user.password = join_request.password_hash
+        user.save(update_fields=["password", "updated_at"])
 
     if role is None:
         role = Role.all_objects.filter(cooperative=cooperative,
@@ -449,13 +484,16 @@ def approve_join_request(join_request, *, actor, role=None):
     join_request.decided_by = actor
     join_request.decided_at = timezone.now()
     join_request.membership = membership
+    join_request.password_hash = ""
     join_request.save(update_fields=["status", "decided_by", "decided_at",
-                                     "membership", "updated_at"])
+                                     "membership", "password_hash",
+                                     "updated_at"])
 
     from audit.services import record_action
     record_action(cooperative=cooperative, actor=actor,
                   action="membership.join_request_approved", entity=membership,
-                  after={"member_no": member_no, "email": user.email})
+                  after={"member_no": member_no, "email": user.email,
+                         "phone": user.phone})
 
     def _welcome():
         from communications.email import send_welcome_email
@@ -474,8 +512,10 @@ def reject_join_request(join_request, *, actor, note=""):
     join_request.decided_by = actor
     join_request.decided_at = timezone.now()
     join_request.decision_note = note
+    join_request.password_hash = ""
     join_request.save(update_fields=["status", "decided_by", "decided_at",
-                                     "decision_note", "updated_at"])
+                                     "decision_note", "password_hash",
+                                     "updated_at"])
 
     from audit.services import record_action
     record_action(cooperative=join_request.cooperative, actor=actor,

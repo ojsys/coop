@@ -22,6 +22,7 @@ from django.conf import settings
 from django.contrib.auth.tokens import default_token_generator
 from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
+from django.utils import timezone
 from django.utils.encoding import force_bytes
 from django.utils.html import strip_tags
 from django.utils.http import urlsafe_base64_encode
@@ -178,6 +179,29 @@ def send_password_reset_email(user, cooperative=None) -> bool:
             "cta_label": "Choose a new password",
             "timeout_hours": _timeout_hours(),
         },
+    )
+
+
+def send_access_code_notice(access_code) -> bool:
+    """Tell someone with an email that an officer issued them an access code.
+
+    Never carries the code itself, which the officer hands over. If they did
+    not ask for one, this is how they find out.
+    """
+    user = access_code.user
+    cooperative = access_code.cooperative
+    issuer = access_code.issued_by
+    return send_alert_email(
+        to=user.email,
+        subject="An access code was issued for your account",
+        heading="An access code was issued for your account",
+        intro=(f"An officer of {cooperative.name} gave you a code to choose a "
+               "new password. If you did not ask for one, contact your "
+               "society; your current password works until the code is used."),
+        rows=[("Issued by", issuer.full_name if issuer else "—"),
+              ("Expires", timezone.localtime(access_code.expires_at)
+               .strftime("%d %b %Y, %H:%M"))],
+        cooperative=cooperative,
     )
 
 
