@@ -187,9 +187,13 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
     def bulk_import(self, request):
         """Create members in bulk from an uploaded CSV.
 
-        Columns: member_no, full_name, email, phone, share_capital, role_slug.
+        Columns: full_name, email, phone, share_capital, role_slug, and an
+        optional member_no. Numbers are assigned automatically; member_no is
+        only for a society bringing its existing register across, so members
+        keep the numbers already on their passbooks.
         Returns per-row results so the admin can fix and re-upload failures.
         """
+        from accounts.join_services import next_member_no
         import csv
         import io
 
@@ -209,11 +213,12 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
             member_no = (row.get("member_no") or "").strip()
             full_name = (row.get("full_name") or "").strip()
             email = (row.get("email") or "").strip().lower()
-            if not member_no or not full_name or not email:
-                errors.append({"row": i, "error": "member_no, full_name and "
-                                                  "email are required"})
+            if not full_name or not email:
+                errors.append({"row": i,
+                               "error": "full_name and email are required"})
                 continue
-            if Membership.objects.filter(member_no=member_no).exists():
+            if member_no and Membership.objects.filter(
+                    member_no=member_no).exists():
                 errors.append({"row": i,
                                "error": f"member_no {member_no} already exists"})
                 continue
@@ -228,7 +233,7 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
                                    "error": f"{email} is already a member"})
                     continue
                 Membership.objects.create(
-                    user=user, member_no=member_no,
+                    user=user, member_no=member_no or next_member_no(coop),
                     share_capital=(row.get("share_capital") or 0) or 0,
                     role=roles.get((row.get("role_slug") or "").strip()))
                 created += 1

@@ -153,31 +153,45 @@ def check_role_keeps_officers(role, new_permissions):
     )
 
 
-def _next_member_no(cooperative) -> str:
-    """Allocate a free member number for a cooperative.
+def next_member_no(cooperative) -> str:
+    """Allocate the next member number for a cooperative.
 
-    House style is a short prefix and a sequence (IMC-0001), the prefix taken
-    from the cooperative's initials so the number reads sensibly on a
-    statement. ``uniq_member_no_per_coop`` is a database constraint, so this
-    checks what is taken rather than assuming a count is safe — members can be
-    imported or deleted, and a count would collide.
+    Numbers are assigned by the platform, never typed: house style is a short
+    prefix and a sequence (IMC-0001), the prefix taken from the cooperative's
+    initials so the number reads sensibly on a statement.
+
+    The next number follows the highest already issued with that prefix
+    rather than filling gaps, so a former member's number is never handed to
+    someone new — statements, receipts and minutes may still name it.
+
+    Takes a lock on the cooperative row so two admissions at the same moment
+    cannot be given the same number; the caller's transaction must also hold
+    the insert (``uniq_member_no_per_coop`` is the backstop).
     """
     import re
     import unicodedata
 
-    ascii_name = (unicodedata.normalize("NFKD", cooperative.name)
-                  .encode("ascii", "ignore").decode())
-    initials = "".join(w[0] for w in re.findall(r"[A-Za-z]+", ascii_name))
-    prefix = (initials[:4] or "MEM").upper()
+    from tenants.models import Cooperative
 
-    taken = set(
-        Membership.all_objects.filter(cooperative=cooperative)
-        .values_list("member_no", flat=True)
-    )
-    n = 1
-    while f"{prefix}-{n:04d}" in taken:
-        n += 1
-    return f"{prefix}-{n:04d}"
+    with transaction.atomic():
+        Cooperative.objects.select_for_update().filter(
+            pk=cooperative.pk).first()
+
+        ascii_name = (unicodedata.normalize("NFKD", cooperative.name)
+                      .encode("ascii", "ignore").decode())
+        initials = "".join(w[0] for w in re.findall(r"[A-Za-z]+", ascii_name))
+        prefix = (initials[:4] or "MEM").upper()
+
+        pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)$")
+        highest = 0
+        for number in (Membership.all_objects
+                       .filter(cooperative=cooperative,
+                               member_no__startswith=f"{prefix}-")
+                       .values_list("member_no", flat=True)):
+            match = pattern.match(number)
+            if match:
+                highest = max(highest, int(match.group(1)))
+        return f"{prefix}-{highest + 1:04d}"
 
 
 def create_founding_admin(cooperative, *, full_name, email, phone="",
@@ -221,7 +235,7 @@ def create_founding_admin(cooperative, *, full_name, email, phone="",
         cooperative=cooperative, slug=role_slug).first()
     membership = Membership.all_objects.create(
         cooperative=cooperative, user=user, role=role,
-        member_no=_next_member_no(cooperative),
+        member_no=next_member_no(cooperative),
         status=Membership.Status.ACTIVE, joined_at=timezone.localdate(),
     )
 
@@ -397,8 +411,10 @@ def _notify_join_request(request):
 
 
 @transaction.atomic
-def approve_join_request(join_request, *, actor, member_no, role=None):
+def approve_join_request(join_request, *, actor, role=None):
     """Admit the applicant: create their account and membership.
+
+    Their member number is assigned here (:func:`next_member_no`).
 
     The account is created here — not when they applied — so an unapproved
     stranger never holds credentials for a society. They are emailed a
@@ -408,10 +424,7 @@ def approve_join_request(join_request, *, actor, member_no, role=None):
         raise SignupError("This request has already been decided.")
 
     cooperative = join_request.cooperative
-
-    if Membership.all_objects.filter(cooperative=cooperative,
-                                     member_no=member_no).exists():
-        raise SignupError(f"Member number {member_no} is already in use.")
+    member_no = next_member_no(cooperative)
 
     user = User.objects.filter(email__iexact=join_request.email).first()
     if user is None:

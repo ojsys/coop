@@ -437,29 +437,32 @@ def test_approval_creates_the_member_and_emails_a_set_password_link(
     with django_capture_on_commit_callbacks(execute=True):
         resp = officer_client.post(
             f"/api/v1/join-requests/{joiner.id}/approve/",
-            {"member_no": "IMC-2001"}, format="json")
+            {}, format="json")
 
     assert resp.status_code == 200, resp.data
     joiner.refresh_from_db()
     assert joiner.status == JoinRequest.Status.APPROVED
     assert joiner.membership is not None
-    assert joiner.membership.member_no == "IMC-2001"
+    assert joiner.membership.member_no.startswith("IMC-")
 
     user = User.objects.get(email="tunde@example.com")
     assert not user.has_usable_password(), "no password is ever chosen for them"
     assert "/reset-password?uid=" in mail.outbox[0].body
 
 
-def test_approval_refuses_a_duplicate_member_number(coop, officer_client, member):
+def test_approval_assigns_the_number_whatever_is_sent(coop, officer_client,
+                                                     member):
+    """Numbers are the platform's to assign: one sent with the approval,
+    even a taken one, is ignored rather than trusted."""
     joiner = request_to_join(cooperative=coop, full_name="Tunde",
                              email="tunde@example.com")
     resp = officer_client.post(
         f"/api/v1/join-requests/{joiner.id}/approve/",
         {"member_no": member.member_no}, format="json")
 
-    assert resp.status_code == 400
+    assert resp.status_code == 200, resp.data
     joiner.refresh_from_db()
-    assert joiner.status == JoinRequest.Status.PENDING
+    assert joiner.membership.member_no == "IMC-0848"
 
 
 def test_a_decided_request_cannot_be_decided_again(coop, officer):
@@ -468,7 +471,7 @@ def test_a_decided_request_cannot_be_decided_again(coop, officer):
     reject_join_request(joiner, actor=officer, note="no")
 
     with pytest.raises(SignupError):
-        approve_join_request(joiner, actor=officer, member_no="IMC-9999")
+        approve_join_request(joiner, actor=officer)
 
 
 def test_officers_only_see_their_own_society_queue(coop, other_coop,

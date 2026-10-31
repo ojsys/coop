@@ -273,14 +273,10 @@ class JoinRequestViewSet(TenantScopedViewMixin,
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):
-        member_no = (request.data.get("member_no") or "").strip()
-        if not member_no:
-            raise serializers.ValidationError(
-                {"member_no": ["A member number is required."]})
-
+        # The member number is assigned automatically; any sent is ignored.
         try:
             membership = approve_join_request(
-                self.get_object(), actor=request.user, member_no=member_no)
+                self.get_object(), actor=request.user)
         except SignupError as exc:
             raise serializers.ValidationError({"detail": [str(exc)]}) from exc
 

@@ -39,19 +39,19 @@ def test_bulk_import_creates_and_reports_errors(coop):
         "member_no,full_name,email,phone,share_capital,role_slug\n"
         "IMC-100,Ada Nwosu,ada@example.com,08030000000,50000,member\n"
         "IMC-101,Bola Ade,bola@example.com,,10000,\n"
-        ",Missing No,noreq@example.com,,0,\n"          # missing member_no -> error
+        ",No Number,nonum@example.com,,0,\n"           # blank -> assigned
         "IMC-100,Dup,dup@example.com,,0,\n"            # duplicate member_no -> error
     )
     resp = client.post("/api/v1/members/import/", {"file": _csv(csv)},
                        format="multipart")
     assert resp.status_code == 200, resp.content
     body = resp.json()
-    assert body["created"] == 2
-    assert len(body["errors"]) == 2
-    rows_with_errors = {e["row"] for e in body["errors"]}
-    assert rows_with_errors == {4, 5}
+    assert body["created"] == 3
+    assert [e["row"] for e in body["errors"]] == [5]
     with use_tenant(coop):
         assert Membership.objects.filter(member_no="IMC-100").count() == 1
+        assigned = Membership.objects.get(user__email="nonum@example.com")
+        assert assigned.member_no.startswith("IMC-")
 
 
 def test_import_requires_a_file(coop):

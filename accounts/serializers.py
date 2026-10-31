@@ -226,7 +226,9 @@ class MembershipSerializer(serializers.ModelSerializer):
                   "verification_note", "verification_missing",
                   "verification_withdrawn", "profile_percent",
                   "profile_steps", "verified_by_name", "verified_at"]
-        read_only_fields = ["verified_at"]
+        # Assigned by the platform when someone is added, never typed or
+        # changed: see accounts.join_services.next_member_no.
+        read_only_fields = ["verified_at", "member_no"]
 
     def get_verification_withdrawn(self, obj) -> bool:
         return obj.verification == Membership.Verification.REVOKED
@@ -257,6 +259,11 @@ class MembershipSerializer(serializers.ModelSerializer):
         )
 
     def create(self, validated_data):
+        from django.db import transaction
+
+        from accounts.join_services import next_member_no
+        from core.context import get_current_cooperative
+
         user_data = validated_data.pop("user")
         user, _ = User.objects.get_or_create(
             email=user_data["email"],
@@ -265,7 +272,10 @@ class MembershipSerializer(serializers.ModelSerializer):
                 "phone": user_data.get("phone", ""),
             },
         )
-        return Membership.objects.create(user=user, **validated_data)
+        with transaction.atomic():
+            return Membership.objects.create(
+                user=user, member_no=next_member_no(get_current_cooperative()),
+                **validated_data)
 
     def validate(self, attrs):
         """Do not let the last officer be demoted or deactivated.
@@ -324,7 +334,7 @@ class MembershipSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         # Editable: the person's name/phone (on the shared User) plus the
-        # membership's role, status, share_capital and member_no. Email is the
+        # membership's role, status and share_capital. Email is the
         # login identity and is intentionally not changed here.
         user_data = validated_data.pop("user", {})
         user = instance.user

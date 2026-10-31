@@ -108,7 +108,7 @@ def test_approval_adds_the_society_to_the_same_account(
 
     mail.outbox.clear()
     with django_capture_on_commit_callbacks(execute=True):
-        approve_join_request(req, actor=officer, member_no="ABA-1")
+        approve_join_request(req, actor=officer)
 
     me = signed_in.get("/api/v1/me/").json()
     assert {m["cooperative_name"] for m in me["memberships"]} == {
