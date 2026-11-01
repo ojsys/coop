@@ -174,8 +174,11 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
 
         For members with no email (accounts.access_codes). The code is in this
         response only: the officer reads it out or writes it down for them.
+        When SMS is on it is also texted to the member's phone.
         """
-        from accounts.access_codes import AccessCodeError, issue_access_code
+        from accounts.access_codes import (
+            AccessCodeError, issue_access_code, text_access_code,
+        )
 
         membership = self.get_object()
         try:
@@ -183,12 +186,16 @@ class MembershipViewSet(TenantScopedViewMixin, viewsets.ModelViewSet):
         except AccessCodeError as exc:
             return Response({"detail": str(exc)}, status=400)
         user = membership.user
+        texted = text_access_code(row, code)
+        detail = (f"We've texted this code to {user.full_name}. You can also "
+                  "read it out to them." if texted else
+                  f"Give this code to {user.full_name}.")
         return Response({
             "code": code,
             "expires_at": row.expires_at,
             "sign_in_with": user.phone or user.email,
-            "detail": f"Give this code to {user.full_name}. It works once, "
-                      "for 72 hours.",
+            "texted_to": user.phone if texted else "",
+            "detail": f"{detail} It works once, for 72 hours.",
         })
 
     @action(detail=True, methods=["get"])

@@ -231,6 +231,25 @@ SITE_URL = os.environ.get('SITE_URL', 'http://localhost:5173')
 PAYER_EMAIL_DOMAIN = os.environ.get('PAYER_EMAIL_DOMAIN',
                                     'members.mycooperativeos.com')
 
+# --- SMS -------------------------------------------------------------------
+# Access codes by text message (communications.sms). With no Termii key SMS is
+# off, and members with no email get their codes from an officer instead.
+TERMII_API_KEY = os.environ.get('TERMII_API_KEY', '')
+# Must be approved by Termii for this account.
+TERMII_SENDER_ID = os.environ.get('TERMII_SENDER_ID', '')
+# Shown on the Termii dashboard; it differs between accounts.
+TERMII_BASE_URL = os.environ.get('TERMII_BASE_URL', 'https://api.ng.termii.com')
+TERMII_CHANNEL = os.environ.get('TERMII_CHANNEL', 'dnd')
+SMS_BACKEND = os.environ.get('SMS_BACKEND', 'termii' if TERMII_API_KEY else '')
+# Calling codes texts may go to; anything else is refused before it costs.
+SMS_ALLOWED_COUNTRY_CODES = [
+    code.strip().lstrip('+') for code in
+    os.environ.get('SMS_ALLOWED_COUNTRY_CODES', '234').split(',')
+    if code.strip()
+]
+# All texts in any 24 hours, a ceiling on the bill.
+SMS_DAILY_LIMIT = int(os.environ.get('SMS_DAILY_LIMIT', '300'))
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

@@ -99,6 +99,32 @@ def email_delivery_configured(app_configs, **kwargs):
 
 
 @register()
+def sms_delivery_configured(app_configs, **kwargs):
+    """Warn when Termii is selected but cannot send.
+
+    Like mail, a text that never arrives is invisible: "forgot password"
+    answers the same whether or not a code went out (communications.sms).
+    """
+    from django.conf import settings
+
+    if getattr(settings, "SMS_BACKEND", "") != "termii":
+        return []
+    missing = [name for name in ("TERMII_API_KEY", "TERMII_SENDER_ID")
+               if not getattr(settings, name, "")]
+    if not missing:
+        return []
+    return [Warning(
+        "Termii SMS is selected but not fully configured: "
+        f"{', '.join(missing)} {'is' if len(missing) == 1 else 'are'} empty.",
+        hint=("Set these in backend/.env. The sender ID must be one Termii "
+              "has approved for your account, or texts to Nigerian numbers "
+              "on the DND route are refused. To switch SMS off, leave "
+              "TERMII_API_KEY empty and SMS_BACKEND unset."),
+        id="core.W005",
+    )]
+
+
+@register()
 def frontend_build_present(app_configs, **kwargs):
     """Warn when FRONTEND_DIST has no index.html to serve."""
     from django.conf import settings

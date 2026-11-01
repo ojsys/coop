@@ -197,3 +197,34 @@ class MemberEmailRecipient(TenantScopedModel, TimeStampedModel):
 
     def __str__(self) -> str:
         return f"{self.address} · {self.email}"
+
+
+class SmsMessage(TimeStampedModel):
+    """One text the platform tried to send (communications.sms).
+
+    Holds no message text: for an access code the text is the secret. The
+    rows are what the per-number and daily limits count.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SENT = "sent", "Sent"
+        FAILED = "failed", "Failed"
+
+    to = models.CharField(max_length=20, db_index=True)
+    purpose = models.CharField(max_length=32)
+    backend = models.CharField(max_length=16)
+    status = models.CharField(max_length=8, choices=Status.choices,
+                              default=Status.PENDING)
+    provider_id = models.CharField(max_length=64, blank=True)
+    error = models.CharField(max_length=255, blank=True)
+    cooperative = models.ForeignKey(
+        "tenants.Cooperative", on_delete=models.SET_NULL, null=True,
+        blank=True, related_name="+")
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [models.Index(fields=["created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.purpose} → {self.to} ({self.status})"

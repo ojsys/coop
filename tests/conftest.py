@@ -21,6 +21,17 @@ def verify(cooperative):
     return cooperative
 
 
+@pytest.fixture(autouse=True)
+def _sms_outbox(settings):
+    """Texts land in communications.sms.outbox, like mail in mail.outbox."""
+    from communications import sms
+
+    settings.SMS_BACKEND = "locmem"
+    sms.outbox.clear()
+    yield sms.outbox
+    sms.outbox.clear()
+
+
 @pytest.fixture
 def coop(db):
     """A fully provisioned, verified cooperative (chart of accounts + roles

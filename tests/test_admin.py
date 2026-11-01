@@ -32,7 +32,7 @@ from approvals.models import ApprovalRequest
 from audit.models import AuditLog
 from communications.models import (Announcement, ChannelPreference,
                                    MemberEmail, MemberEmailRecipient,
-                                   Notification)
+                                   Notification, SmsMessage)
 from contributions.models import Contribution
 from contributions.services import record_contribution
 from core.context import set_current_cooperative, use_tenant
@@ -182,6 +182,8 @@ def dataset(coop, member, dues_type, member_funds):
                                               reason="Moving abroad")
         AccessCode.objects.create(user=member.user, cooperative=coop,
                                   code_hash="!", expires_at=now)
+        SmsMessage.objects.create(to="+2348034412290", purpose="access_code",
+                                  backend="locmem", cooperative=coop)
         # Unpaid on purpose: a requested-but-unapproved payout is the state the
         # read-only admin screen exists to show.
         Withdrawal.objects.create(

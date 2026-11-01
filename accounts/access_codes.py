@@ -1,14 +1,20 @@
 """
 Access codes: how a member with no email sets or resets their password.
 
-An officer of the society issues one from the member's record and hands it
-over in person or by phone. The member types it with their phone number in the
-app or on the website and chooses a password. No SMS provider is involved; when
-one is wired up, "text me a code" can issue the same codes.
+Two ways to get one:
 
-A code is eight digits, shown to the officer once and stored hashed. It works
-once, for 72 hours, and is burnt after five wrong tries. Issuing a new one
-cancels any earlier code for that person.
+- An officer of the society issues one from the member's record and hands it
+  over in person, by phone, or by text when SMS is switched on
+  (communications.sms). It works for 72 hours.
+- The member asks for one by text from "Forgot password" with their phone
+  number (:func:`text_me_a_code`). It works for 30 minutes.
+
+Either way the member types it with their phone number in the app or on the
+website and chooses a password. A code is eight digits, stored hashed, works
+once and is burnt after five wrong tries. An officer's new code cancels every
+earlier one for that person; a texted one cancels only earlier texted ones,
+so a stranger asking for texts to someone's number cannot spoil the code
+their secretary just gave them.
 
 Officers manage their own society's people, not the platform's: a code cannot
 be issued for someone who holds an office in another society, staff the
@@ -32,24 +38,37 @@ from core.models import TimeStampedModel
 
 CODE_DIGITS = 8
 LIFETIME = timedelta(hours=72)
+SMS_LIFETIME = timedelta(minutes=30)
 MAX_ATTEMPTS = 5
+# Texts with a code to any one number: at most this many a day, and not two
+# within a minute.
+SMS_PER_DAY = 5
+SMS_GAP = timedelta(seconds=60)
+SMS_PURPOSE = "access_code"
 
 
 class AccessCode(TimeStampedModel):
     """A one-time code that lets a person choose a new password."""
 
+    class Origin(models.TextChoices):
+        OFFICER = "officer", "Issued by an officer"
+        SMS = "sms", "Asked for by text"
+
     user = models.ForeignKey(settings.AUTH_USER_MODEL,
                              on_delete=models.CASCADE,
                              related_name="access_codes")
     code_hash = models.CharField(max_length=128)
-    # The society whose officer issued it, for the audit trail and for the
-    # message the member sees.
+    # The society whose officer issued it, or for a texted code the society
+    # the member belongs to, for the audit trail and the message they see.
     cooperative = models.ForeignKey("tenants.Cooperative",
                                     on_delete=models.CASCADE,
                                     related_name="+")
+    # Empty for a code the member asked for by text.
     issued_by = models.ForeignKey(settings.AUTH_USER_MODEL,
                                   on_delete=models.SET_NULL, null=True,
                                   related_name="+")
+    origin = models.CharField(max_length=8, choices=Origin.choices,
+                              default=Origin.OFFICER)
     expires_at = models.DateTimeField()
     used_at = models.DateTimeField(null=True, blank=True)
     attempts = models.PositiveSmallIntegerField(default=0)
@@ -112,7 +131,7 @@ def issue_access_code(membership, *, actor) -> tuple[AccessCode, str]:
     now = timezone.now()
     # One live code at a time: the newest is the one the officer just read out.
     AccessCode.objects.filter(user=user, used_at=None).update(used_at=now)
-    code = "".join(secrets.choice("0123456789") for _ in range(CODE_DIGITS))
+    code = _new_code()
     row = AccessCode.objects.create(
         user=user, code_hash=make_password(code),
         cooperative=membership.cooperative, issued_by=actor,
@@ -129,6 +148,92 @@ def issue_access_code(membership, *, actor) -> tuple[AccessCode, str]:
             send_access_code_notice(row)
         transaction.on_commit(_tell)
     return row, code
+
+
+def _new_code() -> str:
+    return "".join(secrets.choice("0123456789") for _ in range(CODE_DIGITS))
+
+
+def _grouped(code) -> str:
+    return f"{code[:4]} {code[4:]}"
+
+
+def _may_text(phone) -> bool:
+    """SMS is on, the number is one we text, and it has not had too many."""
+    from communications.sms import can_text, recently_texted
+
+    if not can_text(phone):
+        return False
+    now = timezone.now()
+    if recently_texted(phone, SMS_PURPOSE, since=now - SMS_GAP):
+        return False
+    return recently_texted(phone, SMS_PURPOSE,
+                           since=now - timedelta(days=1)) < SMS_PER_DAY
+
+
+def text_access_code(row, code) -> bool:
+    """Text an officer-issued code to the member too. Returns whether it went.
+
+    Called once the code is committed. The officer still sees the code, so a
+    text that does not arrive costs nothing but a read-out.
+    """
+    from communications.sms import send_sms
+
+    phone = row.user.phone
+    if not _may_text(phone):
+        return False
+    return send_sms(
+        phone,
+        f"Your {row.cooperative.name} access code is {_grouped(code)}. Use it "
+        "with this phone number in CooperativeOS to choose your password. It "
+        "works once, for 72 hours.",
+        purpose=SMS_PURPOSE, cooperative=row.cooperative)
+
+
+def text_me_a_code(user) -> bool:
+    """Text a short-lived code to someone who asked from "Forgot password".
+
+    Returns whether a text went. The caller answers the same either way, so
+    nothing here says whether a number is registered.
+
+    Not for platform staff, whose accounts are worth more than a SIM swap,
+    nor for anyone with no active membership: a code belongs to a society.
+    """
+    from accounts.models import Membership
+    from communications.sms import send_sms
+
+    if user is None or not user.is_active or not user.phone:
+        return False
+    if user.is_platform_admin or user.is_staff:
+        return False
+    membership = (Membership.all_objects
+                  .filter(user=user, status=Membership.Status.ACTIVE)
+                  .select_related("cooperative").order_by("-created_at")
+                  .first())
+    if membership is None or not _may_text(user.phone):
+        return False
+
+    cooperative = membership.cooperative
+    code = _new_code()
+    with transaction.atomic():
+        now = timezone.now()
+        AccessCode.objects.filter(user=user, used_at=None,
+                                  origin=AccessCode.Origin.SMS
+                                  ).update(used_at=now)
+        AccessCode.objects.create(
+            user=user, code_hash=make_password(code), cooperative=cooperative,
+            origin=AccessCode.Origin.SMS, expires_at=now + SMS_LIFETIME)
+
+        from audit.services import record_action
+        record_action(cooperative=cooperative, actor=user,
+                      action="account.access_code_texted", entity=user)
+
+    return send_sms(
+        user.phone,
+        f"Your CooperativeOS code is {_grouped(code)}. Use it to choose a new "
+        "password. It works for 30 minutes. Never share it; no officer will "
+        "ask you for it.",
+        purpose=SMS_PURPOSE, cooperative=cooperative)
 
 
 def _clean(code) -> str:
@@ -168,5 +273,5 @@ def redeem_access_code(*, user, code, password):
                           entity=user)
     if match is None:
         raise AccessCodeError("That code is not right, or it has expired. "
-                              "Ask your society's secretary for a new one.")
+                              "Ask for a new one.")
     return user

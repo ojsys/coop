@@ -22,6 +22,7 @@ from rest_framework.views import APIView
 
 from accounts.models import Membership, User
 from communications.email import send_password_reset_email
+from communications.sms import sms_enabled
 
 # Deliberately identical whether or not the address is registered: a differing
 # response lets anyone test which members belong to a society.
@@ -29,6 +30,16 @@ GENERIC_RESPONSE = {
     "detail": "If that account has an email address, a reset link is on its "
               "way. If you signed up with only a phone number, ask your "
               "society's secretary for an access code.",
+}
+
+# The reply to a phone number when SMS is on. ``next`` tells the app and the
+# website to open the code form; it depends only on what was typed, never on
+# whether the number is registered.
+TEXTED_RESPONSE = {
+    "detail": "If that number has an account, we've texted it a code. Enter "
+              "it to choose a new password. No text after a few minutes? Ask "
+              "your society's secretary for an access code.",
+    "next": "access_code",
 }
 
 
@@ -76,7 +87,12 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 
 class PasswordResetRequestView(APIView):
-    """`POST /auth/password-reset/` — email a reset link."""
+    """`POST /auth/password-reset/` — email a reset link, or text a code.
+
+    A phone number gets a code by text when SMS is on
+    (accounts.access_codes.text_me_a_code). A number we cannot text, a
+    foreign one say, falls back to the account's email if it has one.
+    """
 
     authentication_classes: list = []
     permission_classes = [AllowAny]
@@ -87,24 +103,35 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user = user_for_identifier(serializer.validated_data["identifier"])
+        identifier = serializer.validated_data["identifier"]
+        user = user_for_identifier(identifier)
+        by_phone = "@" not in identifier
+        if by_phone and sms_enabled():
+            from accounts.access_codes import text_me_a_code
+            if not text_me_a_code(user) and user is not None and user.email:
+                self._email_link(user)
+            return Response(TEXTED_RESPONSE)
+
         # Someone with no email gets an access code from their society
         # instead; the reply is the same so it reveals nothing either way.
         if user is not None and user.email:
-            # Brand the mail with the society when the user belongs to exactly
-            # one; otherwise it goes out under the platform's own brand.
-            # all_objects, not user.memberships: a reverse manager inherits
-            # TenantManager, which returns nothing unless a tenant is bound —
-            # and a password reset is unauthenticated, so none ever is.
-            memberships = list(
-                Membership.all_objects.filter(user=user)
-                .select_related("cooperative")[:2]
-            )
-            cooperative = (memberships[0].cooperative
-                           if len(memberships) == 1 else None)
-            send_password_reset_email(user, cooperative=cooperative)
-
+            self._email_link(user)
         return Response(GENERIC_RESPONSE)
+
+    @staticmethod
+    def _email_link(user):
+        # Brand the mail with the society when the user belongs to exactly
+        # one; otherwise it goes out under the platform's own brand.
+        # all_objects, not user.memberships: a reverse manager inherits
+        # TenantManager, which returns nothing unless a tenant is bound —
+        # and a password reset is unauthenticated, so none ever is.
+        memberships = list(
+            Membership.all_objects.filter(user=user)
+            .select_related("cooperative")[:2]
+        )
+        cooperative = (memberships[0].cooperative
+                       if len(memberships) == 1 else None)
+        send_password_reset_email(user, cooperative=cooperative)
 
 
 class PasswordResetConfirmView(APIView):
@@ -215,8 +242,7 @@ class AccessCodeRedeemView(APIView):
         except AccessCodeError:
             return Response(
                 {"detail": "That code is not right, or it has expired. Check "
-                           "the phone number, or ask your society's "
-                           "secretary for a new code."},
+                           "the phone number, or ask for a new code."},
                 status=status.HTTP_400_BAD_REQUEST)
         return Response({"detail": "Your password is set. You can now sign "
                                    "in.",

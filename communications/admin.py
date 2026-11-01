@@ -10,7 +10,7 @@ from django.contrib import admin
 
 from communications.models import (Announcement, ChannelPreference,
                                    MemberEmail, MemberEmailRecipient,
-                                   Notification)
+                                   Notification, SmsMessage)
 from core.admin import TenantScopedModelAdmin, TenantScopedTabularInline
 
 
@@ -91,6 +91,30 @@ class MemberEmailAdmin(TenantScopedModelAdmin):
     search_fields = ("subject",)
     list_select_related = ("cooperative", "sent_by")
     inlines = [MemberEmailRecipientInline]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(SmsMessage)
+class SmsMessageAdmin(admin.ModelAdmin):
+    """A viewer, for support: did a text go, and what did the provider say.
+
+    The text itself is never stored (communications.sms).
+    """
+
+    list_display = ("to", "purpose", "status", "backend", "cooperative",
+                    "created_at")
+    list_filter = ("status", "purpose", "backend", "created_at")
+    search_fields = ("to", "provider_id")
+    ordering = ("-created_at",)
+    list_select_related = ("cooperative",)
+
+    def get_readonly_fields(self, request, obj=None):
+        return tuple(f.name for f in self.model._meta.fields)
 
     def has_add_permission(self, request):
         return False

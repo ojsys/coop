@@ -41,3 +41,7 @@ CORS_ALLOWED_ORIGINS = [
 EMAIL_BACKEND = os.environ.get(
     'EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend',
 )
+
+# Print texts instead of sending them, so "text me a code" works locally: the
+# code appears in the runserver output.
+SMS_BACKEND = os.environ.get('SMS_BACKEND', 'console')
