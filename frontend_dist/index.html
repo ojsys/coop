@@ -12,9 +12,10 @@
     <meta property="og:title" content="CooperativeOS" />
     <meta property="og:description" content="A digital operating layer for cooperatives everywhere." />
     <meta property="og:url" content="https://www.mycooperativeos.com/" />
-    <!-- One full-colour JPEG: WhatsApp skips some indexed PNGs, and with two
-         og:image tags apps disagree about which to use. Rename the file to
-         change it, since chat apps cache images by URL. -->
+    <!-- The server swaps this URL for /share/card.jpg?v=..., a card built
+         from the logo uploaded under Platform Settings, versioned so chat
+         apps refetch it when the logo changes (backend core/share_card.py).
+         The static file is the fallback when the page is served elsewhere. -->
     <meta property="og:image" content="https://www.mycooperativeos.com/share-card.jpg" />
     <meta property="og:image:secure_url" content="https://www.mycooperativeos.com/share-card.jpg" />
     <meta property="og:image:type" content="image/jpeg" />
