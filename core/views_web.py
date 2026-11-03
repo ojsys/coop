@@ -32,4 +32,27 @@ def spa_index(request):
             "The frontend build is missing. Run `npm run build` in frontend/ "
             "and upload frontend/dist/ alongside the backend."
         )
-    return HttpResponse(index.read_bytes(), content_type="text/html")
+    html = index.read_text(encoding="utf-8")
+    # Link previews show the card built from the uploaded logo, at a URL
+    # that changes with it so chat apps fetch the new one (core.share_card).
+    from core.share_card import CARD_PATH, card_version
+    card = request.build_absolute_uri(f"{CARD_PATH}?v={card_version()}")
+    html = html.replace(STATIC_CARD, card)
+    return HttpResponse(html, content_type="text/html")
+
+
+# What the build's index.html names as the preview image; replaced per request.
+STATIC_CARD = "https://www.mycooperativeos.com/share-card.jpg"
+
+
+def share_card(request):
+    """`GET /share/card.jpg` — the link-preview picture (core.share_card).
+
+    Cached by browsers and apps for a day; the version in the URL changes
+    when the logo does, so a new logo is never stuck behind an old copy.
+    """
+    from core.share_card import card_bytes
+
+    response = HttpResponse(card_bytes(), content_type="image/jpeg")
+    response["Cache-Control"] = "public, max-age=86400"
+    return response

@@ -10,7 +10,7 @@ from django.contrib import admin
 from django.urls import include, path, re_path
 
 from core.media_views import serve_media, serve_private_media
-from core.views_web import spa_index
+from core.views_web import share_card, spa_index
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -41,6 +41,9 @@ urlpatterns += [
 # still reaches Django's APPEND_SLASH redirect instead of being answered with
 # the SPA shell, while a client route like "/administrators" is unaffected.
 urlpatterns += [
+    # The link-preview picture, built from the uploaded logo. A path the SPA
+    # build has no file at, so WhiteNoise never answers it first.
+    path('share/card.jpg', share_card, name='share-card'),
     re_path(r'^(?!(?:api|api-auth|admin|media|static)(?:/|$)).*$', spa_index,
             name='spa'),
 ]
